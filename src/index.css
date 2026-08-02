@@ -251,6 +251,107 @@ button {
   align-self: flex-start;
 }
 
+.network-shell,
+.player-join-card {
+  max-width: 1160px;
+  margin: 0 auto 18px;
+  background: rgb(26 33 48 / 88%);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 16px;
+  display: grid;
+  gap: 12px;
+}
+
+.network-shell label,
+.player-join-card label {
+  display: grid;
+  gap: 6px;
+  color: var(--parchment);
+}
+
+.network-shell input,
+.player-join-card input {
+  border: 1px solid var(--line);
+  background: #111827;
+  color: var(--parchment);
+  border-radius: 8px;
+  padding: 10px;
+}
+
+.network-shell p,
+.player-join-card p,
+.player-join-card small {
+  margin: 0;
+  color: var(--parchment-dim);
+}
+
+.access-card {
+  gap: 14px;
+}
+
+.book-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.book-actions .ghost-button,
+.book-actions .primary-button {
+  min-height: 36px;
+  font-size: 0.68rem;
+}
+
+.invite-box,
+.acl-box {
+  background: rgb(17 24 39 / 60%);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 10px;
+}
+
+.invite-box p,
+.acl-box p {
+  margin: 0 0 8px;
+  color: var(--parchment);
+}
+
+.invite-box code {
+  display: block;
+  overflow-wrap: anywhere;
+  color: var(--ember-bright);
+  font-size: 0.85rem;
+}
+
+.acl-box small {
+  color: var(--parchment-dim);
+}
+
+.acl-box ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 8px;
+}
+
+.acl-box li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.acl-box li span {
+  font-size: 0.9rem;
+  color: var(--parchment-dim);
+}
+
+.acl-box li div {
+  display: flex;
+  gap: 8px;
+}
+
 .topbar {
   display: flex;
   align-items: center;
@@ -278,6 +379,14 @@ button {
   color: var(--parchment-dim);
   background: rgb(21 26 36 / 70%);
   white-space: nowrap;
+}
+
+.player-badge {
+  padding: 7px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  color: var(--ember-bright);
+  background: rgb(21 26 36 / 70%);
 }
 
 .tabs {

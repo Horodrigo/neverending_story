@@ -8,6 +8,9 @@ export interface BookRecord {
   id: string
   name: string
   description: string
+  hostSecret: string
+  inviteToken: string
+  inviteUpdatedAt: number
   createdAt: number
   updatedAt: number
 }
@@ -30,3 +33,23 @@ export interface MapRecord {
 }
 
 export interface ModalContent extends StructureMeta {}
+
+export interface PlayerIdentityRecord {
+  id: string
+  publicKeyJwk: JsonWebKey
+  privateKeyJwk: JsonWebKey
+  fingerprint: string
+  createdAt: number
+  updatedAt: number
+}
+
+export interface LocalAclRecord {
+  id: string
+  bookId: string
+  displayName: string
+  fingerprint: string
+  publicKeyJwk: JsonWebKey
+  country: string
+  approvedAt: number
+  revokedAt: number | null
+}

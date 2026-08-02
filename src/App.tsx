@@ -1,20 +1,52 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react'
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ChangeEvent,
+} from 'react'
 import { Canvas, FabricImage, FabricObject, Shadow } from 'fabric'
 import DOMPurify from 'dompurify'
 import { marked } from 'marked'
 import { db } from './db'
+import {
+  buildInviteUri,
+  generateNewInviteToken,
+  getOrCreateIdentity,
+  signChallenge,
+} from './crypto'
 import type {
   AssetRecord,
   BookRecord,
+  LocalAclRecord,
   MapRecord,
   ModalContent,
+  PlayerIdentityRecord,
   StructureMeta,
 } from './types'
 
 type AppScreen = 'home' | 'narrator' | 'player' | 'about' | 'studio'
+type StudioRole = 'narrator' | 'player'
 
-if (!FabricObject.customProperties.includes('data')) {
-  FabricObject.customProperties = [...FabricObject.customProperties, 'data']
+interface PendingJoin {
+  id: string
+  clientId: string
+  bookId: string
+  displayName: string
+  fingerprint: string
+  publicKeyJwk: JsonWebKey
+  country: string
+  createdAt: number
+}
+
+interface SignalingAclEntry {
+  displayName: string
+  fingerprint: string
+  publicKeyJwk: JsonWebKey
+  country: string
+  approvedAt: number
+  revokedAt: number | null
 }
 
 const DEFAULT_CANVAS_WIDTH = 900
@@ -22,54 +54,25 @@ const DEFAULT_CANVAS_HEIGHT = 620
 const MAX_BACKGROUND_WIDTH = 900
 const MAX_BACKGROUND_HEIGHT = 620
 const LIBRARY_FIT_SIZE = 90
+const DEFAULT_SIGNALING_URL =
+  typeof window !== 'undefined'
+    ? `ws://${window.location.hostname || 'localhost'}:8787`
+    : 'ws://localhost:8787'
+
+if (!FabricObject.customProperties.includes('data')) {
+  FabricObject.customProperties = [...FabricObject.customProperties, 'data']
+}
 
 function uid(prefix: string): string {
   return `${prefix}_${Math.random().toString(36).slice(2, 9)}`
 }
 
-async function fileToDataURL(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader()
-    reader.onload = () => resolve(reader.result as string)
-    reader.onerror = () => reject(reader.error)
-    reader.readAsDataURL(file)
-  })
-}
-
-function getStructureData(object: FabricObject | undefined | null): StructureMeta {
-  if (!object) {
-    return { title: '', description: '', link: '' }
-  }
-
-  const data = object.get('data')
-  if (!data || typeof data !== 'object') {
-    return { title: '', description: '', link: '' }
-  }
-
-  const source = data as Partial<StructureMeta>
+function createBookSecrets() {
   return {
-    title: source.title ?? '',
-    description: source.description ?? '',
-    link: source.link ?? '',
+    hostSecret: `host_${Math.random().toString(36).slice(2, 12)}`,
+    inviteToken: `invite_${Math.random().toString(36).slice(2, 14)}`,
+    inviteUpdatedAt: Date.now(),
   }
-}
-
-function isSafeUrl(url: string): boolean {
-  if (!url.trim()) {
-    return false
-  }
-
-  try {
-    const parsed = new URL(url)
-    return parsed.protocol === 'http:' || parsed.protocol === 'https:'
-  } catch {
-    return false
-  }
-}
-
-function markdownToHtml(markdown: string): string {
-  const rendered = marked.parse(markdown, { async: false }) as string
-  return DOMPurify.sanitize(rendered)
 }
 
 function createInitialMap(bookId: string, name = 'Mapa 1'): MapRecord {
@@ -85,16 +88,62 @@ function createInitialMap(bookId: string, name = 'Mapa 1'): MapRecord {
   }
 }
 
+async function fileToDataURL(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(reader.result as string)
+    reader.onerror = () => reject(reader.error)
+    reader.readAsDataURL(file)
+  })
+}
+
+function getStructureData(object: FabricObject | undefined | null): StructureMeta {
+  if (!object) {
+    return { title: '', description: '', link: '' }
+  }
+  const data = object.get('data')
+  if (!data || typeof data !== 'object') {
+    return { title: '', description: '', link: '' }
+  }
+  const source = data as Partial<StructureMeta>
+  return {
+    title: source.title ?? '',
+    description: source.description ?? '',
+    link: source.link ?? '',
+  }
+}
+
+function isSafeUrl(url: string): boolean {
+  if (!url.trim()) {
+    return false
+  }
+  try {
+    const parsed = new URL(url)
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:'
+  } catch {
+    return false
+  }
+}
+
+function markdownToHtml(markdown: string): string {
+  const rendered = marked.parse(markdown, { async: false }) as string
+  return DOMPurify.sanitize(rendered)
+}
+
 function App() {
   const htmlCanvasRef = useRef<HTMLCanvasElement | null>(null)
   const canvasRef = useRef<Canvas | null>(null)
+  const wsRef = useRef<WebSocket | null>(null)
+  const remoteStateRef = useRef<string | null>(null)
   const isHydratingRef = useRef(false)
   const currentMapIdRef = useRef<string | null>(null)
   const editModeRef = useRef(true)
   const stampAssetIdRef = useRef<string | null>(null)
   const assetsRef = useRef<AssetRecord[]>([])
+  const studioRoleRef = useRef<StudioRole>('narrator')
 
   const [screen, setScreen] = useState<AppScreen>('home')
+  const [studioRole, setStudioRole] = useState<StudioRole>('narrator')
   const [assets, setAssets] = useState<AssetRecord[]>([])
   const [books, setBooks] = useState<BookRecord[]>([])
   const [maps, setMaps] = useState<MapRecord[]>([])
@@ -110,6 +159,20 @@ function App() {
     link: '',
   })
   const [modalContent, setModalContent] = useState<ModalContent | null>(null)
+  const [signalingUrl, setSignalingUrl] = useState(
+    localStorage.getItem('mapstudio_signaling_url') ?? DEFAULT_SIGNALING_URL,
+  )
+  const [connectedRoomBookId, setConnectedRoomBookId] = useState<string | null>(null)
+  const [pendingJoins, setPendingJoins] = useState<PendingJoin[]>([])
+  const [aclEntries, setAclEntries] = useState<LocalAclRecord[]>([])
+  const [networkMessage, setNetworkMessage] = useState<string>('')
+  const [playerIdentity, setPlayerIdentity] = useState<PlayerIdentityRecord | null>(null)
+  const [playerDisplayName, setPlayerDisplayName] = useState('')
+  const [playerInviteToken, setPlayerInviteToken] = useState('')
+  const [playerConnectionState, setPlayerConnectionState] = useState(
+    'Jogador desconectado. Informe o link de convite para entrar.',
+  )
+  const [remoteMapJson, setRemoteMapJson] = useState<string | null>(null)
 
   useEffect(() => {
     currentMapIdRef.current = currentMapId
@@ -126,6 +189,14 @@ function App() {
   useEffect(() => {
     assetsRef.current = assets
   }, [assets])
+
+  useEffect(() => {
+    studioRoleRef.current = studioRole
+  }, [studioRole])
+
+  useEffect(() => {
+    remoteStateRef.current = remoteMapJson
+  }, [remoteMapJson])
 
   const sortedBooks = useMemo(
     () => [...books].sort((left, right) => right.updatedAt - left.updatedAt),
@@ -154,12 +225,25 @@ function App() {
     [maps, sortedBooks],
   )
 
+  useEffect(() => {
+    localStorage.setItem('mapstudio_signaling_url', signalingUrl)
+  }, [signalingUrl])
+
+  useEffect(() => {
+    if (screen !== 'player') {
+      return
+    }
+    const invite = new URL(window.location.href).searchParams.get('invite')
+    if (invite && !playerInviteToken) {
+      setPlayerInviteToken(invite)
+    }
+  }, [playerInviteToken, screen])
+
   const clearCanvas = useCallback(() => {
     const canvas = canvasRef.current
     if (!canvas) {
       return
     }
-
     canvas.clear()
     canvas.backgroundColor = '#0c0f16'
     canvas.setDimensions({
@@ -169,7 +253,38 @@ function App() {
     canvas.requestRenderAll()
   }, [])
 
+  const sendNarratorState = useCallback(
+    (json: string, mapId: string) => {
+      if (studioRoleRef.current !== 'narrator') {
+        return
+      }
+      const ws = wsRef.current
+      if (!ws || ws.readyState !== WebSocket.OPEN || !selectedBookId || !currentBook) {
+        return
+      }
+      if (connectedRoomBookId !== selectedBookId) {
+        return
+      }
+      ws.send(
+        JSON.stringify({
+          type: 'narrator:state-update',
+          bookId: selectedBookId,
+          hostSecret: currentBook.hostSecret,
+          state: {
+            mapId,
+            mapJson: json,
+            updatedAt: Date.now(),
+          },
+        }),
+      )
+    },
+    [connectedRoomBookId, currentBook, selectedBookId],
+  )
+
   const persistCurrentMap = useCallback(async () => {
+    if (studioRoleRef.current !== 'narrator') {
+      return
+    }
     const mapId = currentMapIdRef.current
     const canvas = canvasRef.current
     if (!mapId || !canvas || isHydratingRef.current) {
@@ -182,7 +297,6 @@ function App() {
     if (selectedBookId) {
       await db.books.update(selectedBookId, { updatedAt: now })
     }
-
     setMaps((previous) =>
       previous.map((map) => (map.id === mapId ? { ...map, json, updatedAt: now } : map)),
     )
@@ -193,14 +307,14 @@ function App() {
         ),
       )
     }
-  }, [selectedBookId])
+    sendNarratorState(json, mapId)
+  }, [selectedBookId, sendNarratorState])
 
   const applyModeToObjects = useCallback(() => {
     const canvas = canvasRef.current
     if (!canvas) {
       return
     }
-
     canvas.forEachObject((object) => {
       object.set({
         selectable: editModeRef.current,
@@ -212,7 +326,6 @@ function App() {
         hoverCursor: editModeRef.current ? 'move' : 'pointer',
       })
     })
-
     canvas.selection = editModeRef.current
     canvas.requestRenderAll()
   }, [])
@@ -223,20 +336,32 @@ function App() {
       if (!canvas) {
         return
       }
-
-      if (!mapId) {
-        clearCanvas()
-        return
-      }
-
-      const map = await db.maps.get(mapId)
       isHydratingRef.current = true
       clearCanvas()
 
+      if (studioRoleRef.current === 'player') {
+        if (remoteStateRef.current) {
+          try {
+            const parsed = JSON.parse(remoteStateRef.current)
+            await canvas.loadFromJSON(parsed)
+          } catch {
+            setPlayerConnectionState('Falha ao carregar estado recebido do narrador.')
+          }
+        }
+        applyModeToObjects()
+        canvas.requestRenderAll()
+        isHydratingRef.current = false
+        return
+      }
+
+      if (!mapId) {
+        isHydratingRef.current = false
+        return
+      }
+      const map = await db.maps.get(mapId)
       if (map?.json) {
         await canvas.loadFromJSON(map.json)
       }
-
       applyModeToObjects()
       canvas.requestRenderAll()
       isHydratingRef.current = false
@@ -252,7 +377,14 @@ function App() {
     ])
 
     setAssets(assetRows)
-    setBooks(bookRows)
+    setBooks(
+      bookRows.map((book) => ({
+        ...book,
+        hostSecret: book.hostSecret || createBookSecrets().hostSecret,
+        inviteToken: book.inviteToken || createBookSecrets().inviteToken,
+        inviteUpdatedAt: book.inviteUpdatedAt || Date.now(),
+      })),
+    )
     setMaps(mapRows)
 
     if (bookRows.length > 0) {
@@ -270,19 +402,33 @@ function App() {
   }, [setupInitialState])
 
   useEffect(() => {
+    if (!selectedBookId || studioRole !== 'narrator') {
+      setAclEntries([])
+      return
+    }
+    void db.localAcl
+      .where('bookId')
+      .equals(selectedBookId)
+      .toArray()
+      .then((entries) =>
+        setAclEntries(entries.sort((left, right) => right.approvedAt - left.approvedAt)),
+      )
+  }, [selectedBookId, studioRole])
+
+  useEffect(() => {
     if (screen !== 'studio') {
       return
     }
-
-    if (bookMaps.length === 0) {
-      setCurrentMapId(null)
-      return
+    if (studioRole === 'narrator') {
+      if (bookMaps.length === 0) {
+        setCurrentMapId(null)
+        return
+      }
+      if (!currentMapId || !bookMaps.some((map) => map.id === currentMapId)) {
+        setCurrentMapId(bookMaps[0].id)
+      }
     }
-
-    if (!currentMapId || !bookMaps.some((map) => map.id === currentMapId)) {
-      setCurrentMapId(bookMaps[0].id)
-    }
-  }, [bookMaps, currentMapId, screen])
+  }, [bookMaps, currentMapId, screen, studioRole])
 
   useEffect(() => {
     if (!htmlCanvasRef.current || canvasRef.current || screen !== 'studio') {
@@ -300,7 +446,6 @@ function App() {
       if (!event.target) {
         return
       }
-
       event.target.set(
         'shadow',
         new Shadow({
@@ -317,7 +462,6 @@ function App() {
       if (!event.target) {
         return
       }
-
       event.target.set('shadow', null)
       canvas.requestRenderAll()
     }
@@ -327,13 +471,11 @@ function App() {
         setSelectedObject(null)
         return
       }
-
       const activeObject = canvas.getActiveObject()
       if (!activeObject) {
         setSelectedObject(null)
         return
       }
-
       setSelectedObject(activeObject)
       setSelectedData(getStructureData(activeObject))
     }
@@ -347,11 +489,22 @@ function App() {
     }
 
     const onMouseDown = async (event: { target?: FabricObject; e: MouseEvent }) => {
+      if (studioRoleRef.current === 'player') {
+        if (event.target) {
+          const data = getStructureData(event.target)
+          setModalContent({
+            title: data.title || 'Estrutura sem nome',
+            description: data.description || '(sem descrição registrada)',
+            link: data.link,
+          })
+        }
+        return
+      }
+
       if (editModeRef.current && stampAssetIdRef.current) {
         if (event.target) {
           return
         }
-
         const selectedAsset = assetsRef.current.find(
           (asset) => asset.id === stampAssetIdRef.current,
         )
@@ -364,8 +517,8 @@ function App() {
           crossOrigin: 'anonymous',
         })
         const scale =
-          LIBRARY_FIT_SIZE / Math.max(image.width ?? LIBRARY_FIT_SIZE, image.height ?? LIBRARY_FIT_SIZE)
-
+          LIBRARY_FIT_SIZE /
+          Math.max(image.width ?? LIBRARY_FIT_SIZE, image.height ?? LIBRARY_FIT_SIZE)
         image.set({
           left: pointer.x,
           top: pointer.y,
@@ -383,7 +536,6 @@ function App() {
           cornerSize: 9,
           data: { title: selectedAsset.name, description: '', link: '' } as StructureMeta,
         })
-
         canvas.add(image)
         canvas.setActiveObject(image)
         canvas.requestRenderAll()
@@ -423,15 +575,13 @@ function App() {
     if (screen !== 'studio') {
       return
     }
-
     void loadMapOnCanvas(currentMapId)
-  }, [currentMapId, loadMapOnCanvas, screen])
+  }, [currentMapId, loadMapOnCanvas, remoteMapJson, screen, studioRole])
 
   useEffect(() => {
     if (screen !== 'studio') {
       return
     }
-
     applyModeToObjects()
     if (!editMode) {
       setStampAssetId(null)
@@ -440,12 +590,326 @@ function App() {
     }
   }, [applyModeToObjects, editMode, screen])
 
+  const closeSocket = useCallback(() => {
+    if (wsRef.current) {
+      wsRef.current.close()
+      wsRef.current = null
+    }
+    setConnectedRoomBookId(null)
+    setPendingJoins([])
+  }, [])
+
+  const applyAclUpdate = useCallback(
+    async (bookId: string, acl: SignalingAclEntry[]) => {
+      const now = Date.now()
+      const localEntries: LocalAclRecord[] = acl.map((entry) => ({
+        id: `${bookId}_${entry.fingerprint}`,
+        bookId,
+        displayName: entry.displayName,
+        fingerprint: entry.fingerprint,
+        publicKeyJwk: entry.publicKeyJwk,
+        country: entry.country || 'Desconhecido',
+        approvedAt: entry.approvedAt || now,
+        revokedAt: entry.revokedAt || null,
+      }))
+      await db.transaction('rw', db.localAcl, async () => {
+        await db.localAcl.where('bookId').equals(bookId).delete()
+        if (localEntries.length > 0) {
+          await db.localAcl.bulkAdd(localEntries)
+        }
+      })
+      if (bookId === selectedBookId) {
+        setAclEntries(localEntries.sort((left, right) => right.approvedAt - left.approvedAt))
+      }
+    },
+    [selectedBookId],
+  )
+
+  const connectNarratorRoom = useCallback(
+    async (book: BookRecord) => {
+      closeSocket()
+      const ws = new WebSocket(signalingUrl)
+      wsRef.current = ws
+      setNetworkMessage('Conectando ao servidor de sinalização...')
+
+      ws.onopen = () => {
+        setNetworkMessage('Conectado. Abrindo sala do livro...')
+        ws.send(
+          JSON.stringify({
+            type: 'narrator:open-room',
+            bookId: book.id,
+            hostSecret: book.hostSecret,
+            inviteToken: book.inviteToken,
+          }),
+        )
+      }
+
+      ws.onmessage = (event) => {
+        const payload = JSON.parse(event.data) as {
+          type: string
+          pending?: PendingJoin | PendingJoin[]
+          pendingId?: string
+          inviteToken?: string
+          acl?: SignalingAclEntry[]
+          bookId?: string
+          message?: string
+        }
+
+        if (payload.type === 'room:opened') {
+          setConnectedRoomBookId(book.id)
+          setNetworkMessage('Sala ativa. Convites e lobby em tempo real habilitados.')
+          const initialPending = Array.isArray(payload.pending)
+            ? payload.pending
+            : payload.pending
+              ? [payload.pending]
+              : []
+          setPendingJoins(initialPending)
+          if (payload.acl) {
+            void applyAclUpdate(book.id, payload.acl)
+          }
+          return
+        }
+
+        if (payload.type === 'room:pending-join' && payload.pending && !Array.isArray(payload.pending)) {
+          setPendingJoins((previous) => [payload.pending as PendingJoin, ...previous])
+          return
+        }
+
+        if (payload.type === 'room:invite-rotated' && payload.inviteToken) {
+          setNetworkMessage('Link de convite rotacionado com sucesso.')
+          setBooks((previous) =>
+            previous.map((candidate) =>
+              candidate.id === book.id
+                ? {
+                    ...candidate,
+                    inviteToken: payload.inviteToken!,
+                    inviteUpdatedAt: Date.now(),
+                  }
+                : candidate,
+            ),
+          )
+          return
+        }
+
+        if (payload.type === 'room:acl-updated' && payload.acl) {
+          void applyAclUpdate(book.id, payload.acl)
+          return
+        }
+
+        if (payload.type === 'server:error') {
+          setNetworkMessage(payload.message || 'Erro de rede no servidor de sinalização.')
+        }
+      }
+
+      ws.onerror = () => {
+        setNetworkMessage('Falha ao conectar no servidor de sinalização.')
+      }
+
+      ws.onclose = () => {
+        setConnectedRoomBookId(null)
+      }
+    },
+    [applyAclUpdate, closeSocket, signalingUrl],
+  )
+
+  const rotateInvite = useCallback(
+    async (book: BookRecord) => {
+      const inviteToken = await generateNewInviteToken()
+      const now = Date.now()
+      await db.books.update(book.id, { inviteToken, inviteUpdatedAt: now, updatedAt: now })
+      setBooks((previous) =>
+        previous.map((candidate) =>
+          candidate.id === book.id
+            ? { ...candidate, inviteToken, inviteUpdatedAt: now, updatedAt: now }
+            : candidate,
+        ),
+      )
+
+      if (
+        wsRef.current &&
+        wsRef.current.readyState === WebSocket.OPEN &&
+        connectedRoomBookId === book.id
+      ) {
+        wsRef.current.send(
+          JSON.stringify({
+            type: 'narrator:rotate-invite',
+            bookId: book.id,
+            hostSecret: book.hostSecret,
+            inviteToken,
+          }),
+        )
+      }
+    },
+    [connectedRoomBookId],
+  )
+
+  const approveJoin = useCallback(
+    (pending: PendingJoin) => {
+      const ws = wsRef.current
+      const book = books.find((item) => item.id === pending.bookId)
+      if (!ws || ws.readyState !== WebSocket.OPEN || !book) {
+        return
+      }
+      ws.send(
+        JSON.stringify({
+          type: 'narrator:approve-player',
+          bookId: pending.bookId,
+          hostSecret: book.hostSecret,
+          pendingId: pending.id,
+        }),
+      )
+      setPendingJoins((previous) => previous.filter((entry) => entry.id !== pending.id))
+    },
+    [books],
+  )
+
+  const rejectJoin = useCallback(
+    (pending: PendingJoin) => {
+      const ws = wsRef.current
+      const book = books.find((item) => item.id === pending.bookId)
+      if (!ws || ws.readyState !== WebSocket.OPEN || !book) {
+        return
+      }
+      ws.send(
+        JSON.stringify({
+          type: 'narrator:reject-player',
+          bookId: pending.bookId,
+          hostSecret: book.hostSecret,
+          pendingId: pending.id,
+        }),
+      )
+      setPendingJoins((previous) => previous.filter((entry) => entry.id !== pending.id))
+    },
+    [books],
+  )
+
+  const revokePlayer = useCallback(
+    (entry: LocalAclRecord) => {
+      const ws = wsRef.current
+      const book = books.find((item) => item.id === entry.bookId)
+      if (!ws || ws.readyState !== WebSocket.OPEN || !book) {
+        return
+      }
+      ws.send(
+        JSON.stringify({
+          type: 'narrator:revoke-player',
+          bookId: entry.bookId,
+          hostSecret: book.hostSecret,
+          fingerprint: entry.fingerprint,
+        }),
+      )
+    },
+    [books],
+  )
+
+  const joinAsPlayer = useCallback(async () => {
+    if (!playerDisplayName.trim()) {
+      setPlayerConnectionState('Informe um nome de exibição antes de conectar.')
+      return
+    }
+    if (!playerInviteToken.trim()) {
+      setPlayerConnectionState('Informe o token de convite do narrador.')
+      return
+    }
+
+    const identity = await getOrCreateIdentity()
+    setPlayerIdentity(identity)
+    closeSocket()
+    setPlayerConnectionState('Conectando ao lobby da campanha...')
+
+    const ws = new WebSocket(signalingUrl)
+    wsRef.current = ws
+    ws.onopen = () => {
+      ws.send(
+        JSON.stringify({
+          type: 'player:join-request',
+          inviteToken: playerInviteToken.trim(),
+          displayName: playerDisplayName.trim(),
+          fingerprint: identity.fingerprint,
+          publicKeyJwk: identity.publicKeyJwk,
+        }),
+      )
+    }
+
+    ws.onmessage = (event) => {
+      const payload = JSON.parse(event.data) as {
+        type: string
+        reason?: string
+        challenge?: string
+        pendingId?: string
+        bookId?: string
+        state?: { mapJson?: string }
+        message?: string
+      }
+
+      if (payload.type === 'room:waiting-host') {
+        setPlayerConnectionState(payload.message || 'Aguardando aprovação do narrador.')
+        return
+      }
+
+      if (payload.type === 'room:challenge' && payload.challenge && payload.pendingId && payload.bookId) {
+        void signChallenge(identity.privateKeyJwk, payload.challenge).then((signature) => {
+          ws.send(
+            JSON.stringify({
+              type: 'player:challenge-response',
+              bookId: payload.bookId,
+              pendingId: payload.pendingId,
+              signature,
+            }),
+          )
+          setPlayerConnectionState('Desafio respondido. Validando assinatura...')
+        })
+        return
+      }
+
+      if (payload.type === 'room:approved') {
+        setStudioRole('player')
+        setEditMode(false)
+        setScreen('studio')
+        setSelectedBookId(payload.bookId ?? null)
+        setCurrentMapId(null)
+        setRemoteMapJson(payload.state?.mapJson ?? null)
+        setPlayerConnectionState(
+          'Aprovado pelo narrador. Sessão em modo somente leitura ativa.',
+        )
+        return
+      }
+
+      if (payload.type === 'room:state') {
+        setRemoteMapJson(payload.state?.mapJson ?? null)
+        return
+      }
+
+      if (payload.type === 'room:revoked') {
+        setPlayerConnectionState(payload.reason || 'Acesso revogado pelo narrador.')
+        setScreen('player')
+        setStudioRole('player')
+        setRemoteMapJson(null)
+        return
+      }
+
+      if (payload.type === 'room:rejected') {
+        setPlayerConnectionState(payload.reason || 'Acesso rejeitado.')
+        setScreen('player')
+      }
+    }
+
+    ws.onerror = () => {
+      setPlayerConnectionState('Falha ao conectar no servidor de sinalização.')
+    }
+
+    ws.onclose = () => {
+      if (studioRoleRef.current === 'player') {
+        setPlayerConnectionState('Conexão encerrada. Reconecte para voltar ao mapa do narrador.')
+      }
+    }
+  }, [closeSocket, playerDisplayName, playerInviteToken, signalingUrl])
+
   const handleAssetUpload = useCallback(async (event: ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(event.target.files ?? [])
     if (files.length === 0) {
       return
     }
-
     const uploaded = await Promise.all(
       files.map(
         async (file): Promise<AssetRecord> => ({
@@ -456,7 +920,6 @@ function App() {
         }),
       ),
     )
-
     await db.assets.bulkAdd(uploaded)
     setAssets((previous) => [...previous, ...uploaded])
     event.target.value = ''
@@ -464,6 +927,9 @@ function App() {
 
   const setBackground = useCallback(
     async (file: File) => {
+      if (studioRoleRef.current !== 'narrator') {
+        return
+      }
       const canvas = canvasRef.current
       if (!canvas) {
         return
@@ -480,7 +946,6 @@ function App() {
         MAX_BACKGROUND_HEIGHT / height,
         1,
       )
-
       background.set({
         originX: 'left',
         originY: 'top',
@@ -491,7 +956,6 @@ function App() {
         selectable: false,
         evented: false,
       })
-
       canvas.setDimensions({
         width: width * scale,
         height: height * scale,
@@ -509,7 +973,6 @@ function App() {
       if (!file) {
         return
       }
-
       await setBackground(file)
       event.target.value = ''
     },
@@ -518,14 +981,16 @@ function App() {
 
   const openBook = useCallback(
     async (bookId: string) => {
-      await persistCurrentMap()
+      if (studioRoleRef.current === 'narrator') {
+        await persistCurrentMap()
+      }
+      setStudioRole('narrator')
       setSelectedBookId(bookId)
       setScreen('studio')
       setEditMode(true)
       setStampAssetId(null)
       setModalContent(null)
       setSelectedObject(null)
-
       const nextMap = maps
         .filter((map) => map.bookId === bookId)
         .sort((left, right) => left.position - right.position)[0]
@@ -536,35 +1001,37 @@ function App() {
 
   const createBook = useCallback(async () => {
     const now = Date.now()
+    const secrets = createBookSecrets()
     const nextBook: BookRecord = {
       id: uid('book'),
       name: `Livro ${books.length + 1}`,
       description: 'Novo livro de mapas para uma campanha em construção.',
+      hostSecret: secrets.hostSecret,
+      inviteToken: secrets.inviteToken,
+      inviteUpdatedAt: secrets.inviteUpdatedAt,
       createdAt: now,
       updatedAt: now,
     }
     const nextMap = createInitialMap(nextBook.id)
-
     await db.transaction('rw', db.books, db.maps, async () => {
       await db.books.add(nextBook)
       await db.maps.add(nextMap)
     })
-
     setBooks((previous) => [nextBook, ...previous])
     setMaps((previous) => [...previous, nextMap])
     setSelectedBookId(nextBook.id)
     setCurrentMapId(nextMap.id)
     setScreen('studio')
+    setStudioRole('narrator')
     setEditMode(true)
     setStampAssetId(null)
     setSelectedObject(null)
   }, [books.length])
 
   const addMapTab = useCallback(async () => {
-    if (!selectedBookId) {
+    if (studioRoleRef.current !== 'narrator' || !selectedBookId) {
       return
     }
-
     await persistCurrentMap()
     const now = Date.now()
     const nextMap: MapRecord = {
@@ -576,7 +1043,6 @@ function App() {
       createdAt: now,
       updatedAt: now,
     }
-
     await db.maps.add(nextMap)
     await db.books.update(selectedBookId, { updatedAt: now })
     setMaps((previous) => [...previous, nextMap])
@@ -593,8 +1059,9 @@ function App() {
       if (id === currentMapIdRef.current) {
         return
       }
-
-      await persistCurrentMap()
+      if (studioRoleRef.current === 'narrator') {
+        await persistCurrentMap()
+      }
       setCurrentMapId(id)
       setSelectedObject(null)
     },
@@ -603,15 +1070,13 @@ function App() {
 
   const closeTab = useCallback(
     async (id: string) => {
-      if (bookMaps.length <= 1) {
+      if (studioRoleRef.current !== 'narrator' || bookMaps.length <= 1) {
         return
       }
-
       const index = bookMaps.findIndex((map) => map.id === id)
       if (index === -1) {
         return
       }
-
       if (currentMapIdRef.current === id) {
         await persistCurrentMap()
       }
@@ -623,14 +1088,12 @@ function App() {
       const remainingMaps = bookMaps
         .filter((map) => map.id !== id)
         .map((map, position) => ({ ...map, position }))
-
       await db.transaction('rw', db.maps, async () => {
         await db.maps.delete(id)
         for (const map of remainingMaps) {
           await db.maps.update(map.id, { position: map.position })
         }
       })
-
       setMaps((previous) => [
         ...previous.filter((map) => map.bookId !== selectedBookId),
         ...remainingMaps,
@@ -642,34 +1105,45 @@ function App() {
   )
 
   const saveInspector = useCallback(async () => {
+    if (studioRoleRef.current !== 'narrator') {
+      return
+    }
     const canvas = canvasRef.current
     if (!canvas || !selectedObject) {
       return
     }
-
     selectedObject.set('data', selectedData)
     canvas.requestRenderAll()
     await persistCurrentMap()
   }, [persistCurrentMap, selectedData, selectedObject])
 
   const removeSelectedObject = useCallback(async () => {
+    if (studioRoleRef.current !== 'narrator') {
+      return
+    }
     const canvas = canvasRef.current
     if (!canvas || !selectedObject) {
       return
     }
-
     canvas.remove(selectedObject)
     setSelectedObject(null)
     await persistCurrentMap()
   }, [persistCurrentMap, selectedObject])
 
   const goToNarrator = useCallback(async () => {
-    await persistCurrentMap()
+    if (studioRoleRef.current === 'narrator') {
+      await persistCurrentMap()
+    }
     setScreen('narrator')
+    setStudioRole('narrator')
     setStampAssetId(null)
     setSelectedObject(null)
     setModalContent(null)
   }, [persistCurrentMap])
+
+  const getInviteLink = useCallback((book: BookRecord) => {
+    return buildInviteUri(window.location.href.split('?')[0], book.inviteToken)
+  }, [])
 
   const renderHome = () => (
     <main className="shell home-shell">
@@ -677,27 +1151,26 @@ function App() {
         <p className="eyebrow">Neverending Fantasy Map Studio</p>
         <h1>Escolha como deseja entrar no livro de mapas.</h1>
         <p className="home-copy">
-          Organize histórias como narrador, visualize campanhas como jogador ou consulte
-          informações técnicas do projeto.
+          Narrador controla sessão, convites e sincronização. Jogador acessa apenas leitura em
+          tempo real.
         </p>
         <div className="home-actions">
           <button type="button" className="portal-card" onClick={() => setScreen('narrator')}>
             <span className="portal-title">Narrador</span>
             <span className="portal-copy">
-              Acesse seus livros de mapas, crie novas histórias e edite cada mapa da campanha.
+              Gerencia livros, aprova entrada de jogadores e mantém o estado oficial do mapa.
             </span>
           </button>
           <button type="button" className="portal-card" onClick={() => setScreen('player')}>
             <span className="portal-title">Jogador</span>
             <span className="portal-copy">
-              Veja os livros compartilhados em modo somente leitura. O fluxo de acesso será
-              detalhado futuramente.
+              Entra por convite com autenticação criptográfica e recebe mapa em modo leitura.
             </span>
           </button>
           <button type="button" className="portal-card" onClick={() => setScreen('about')}>
             <span className="portal-title">Sobre</span>
             <span className="portal-copy">
-              Informações essenciais do projeto, autoria, licença e contexto técnico.
+              Informações técnicas, licença e arquitetura de rede da aplicação.
             </span>
           </button>
         </div>
@@ -712,7 +1185,7 @@ function App() {
           <p className="eyebrow">Narrador</p>
           <h2>Livros de mapas criados</h2>
           <p className="screen-copy">
-            Gerencie os livros da campanha e abra cada coleção de mapas para edição.
+            Gerencie campanhas, controle ACL por livro e distribua convite ativo.
           </p>
         </div>
         <div className="screen-actions">
@@ -724,6 +1197,18 @@ function App() {
           </button>
         </div>
       </header>
+
+      <section className="network-shell">
+        <label>
+          Servidor de sinalização
+          <input
+            value={signalingUrl}
+            onChange={(event) => setSignalingUrl(event.target.value)}
+            placeholder="ws://localhost:8787"
+          />
+        </label>
+        <p>{networkMessage || 'Conecte um livro para habilitar lobby e sincronização.'}</p>
+      </section>
 
       {sortedBooks.length === 0 ? (
         <section className="empty-state">
@@ -740,20 +1225,79 @@ function App() {
         <section className="book-grid">
           {sortedBooks.map((book) => {
             const mapCount = maps.filter((map) => map.bookId === book.id).length
+            const bookAcl = aclEntries.filter((entry) => entry.bookId === book.id)
+            const bookPending = pendingJoins.filter((entry) => entry.bookId === book.id)
             return (
-              <article className="book-card" key={book.id}>
+              <article className="book-card access-card" key={book.id}>
                 <p className="book-meta">
                   {mapCount} {mapCount === 1 ? 'mapa' : 'mapas'}
                 </p>
                 <h3>{book.name}</h3>
                 <p>{book.description}</p>
-                <button
-                  type="button"
-                  className="primary-button"
-                  onClick={() => void openBook(book.id)}
-                >
-                  Abrir livro
-                </button>
+                <div className="book-actions">
+                  <button type="button" className="primary-button" onClick={() => void openBook(book.id)}>
+                    Abrir livro
+                  </button>
+                  <button
+                    type="button"
+                    className="ghost-button"
+                    onClick={() => void connectNarratorRoom(book)}
+                  >
+                    Conectar sala
+                  </button>
+                </div>
+                <div className="invite-box">
+                  <p>Convite ativo:</p>
+                  <code>{getInviteLink(book)}</code>
+                  <div className="book-actions">
+                    <button type="button" className="ghost-button" onClick={() => void rotateInvite(book)}>
+                      Rotacionar link
+                    </button>
+                  </div>
+                </div>
+                <div className="acl-box">
+                  <p>Lobby pendente ({bookPending.length})</p>
+                  {bookPending.length === 0 ? (
+                    <small>Nenhuma solicitação pendente.</small>
+                  ) : (
+                    <ul>
+                      {bookPending.map((pending) => (
+                        <li key={pending.id}>
+                          <span>
+                            {pending.displayName} · {pending.country}
+                          </span>
+                          <div>
+                            <button type="button" className="ghost-button" onClick={() => approveJoin(pending)}>
+                              Aprovar
+                            </button>
+                            <button type="button" className="ghost-button" onClick={() => rejectJoin(pending)}>
+                              Rejeitar
+                            </button>
+                          </div>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+                <div className="acl-box">
+                  <p>ACL ({bookAcl.length})</p>
+                  {bookAcl.length === 0 ? (
+                    <small>Nenhum jogador autorizado.</small>
+                  ) : (
+                    <ul>
+                      {bookAcl.map((entry) => (
+                        <li key={entry.id}>
+                          <span>
+                            {entry.displayName} · {entry.country} · {entry.fingerprint}
+                          </span>
+                          <button type="button" className="ghost-button" onClick={() => revokePlayer(entry)}>
+                            Revogar
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
               </article>
             )
           })}
@@ -767,10 +1311,10 @@ function App() {
       <header className="screen-header">
         <div>
           <p className="eyebrow">Jogador</p>
-          <h2>Livros acessiveis em modo visualização</h2>
+          <h2>Entrada autenticada por convite</h2>
           <p className="screen-copy">
-            Esta tela prepara o fluxo de leitura do jogador. Por enquanto ela exibe apenas a
-            estrutura visual da listagem.
+            O jogador entra no lobby, aguarda aprovação manual do narrador e autentica via
+            desafio-resposta com chave local.
           </p>
         </div>
         <button type="button" className="ghost-button" onClick={() => setScreen('home')}>
@@ -778,28 +1322,52 @@ function App() {
         </button>
       </header>
 
-      {playerBooks.length === 0 ? (
-        <section className="empty-state">
-          <h3>Nenhum livro disponivel</h3>
-          <p>Quando houver compartilhamento configurado, os livros liberados para jogadores aparecerão aqui.</p>
-        </section>
-      ) : (
-        <section className="book-grid">
-          {playerBooks.map((book) => (
-            <article className="book-card muted" key={book.id}>
-              <p className="book-meta">Somente leitura</p>
-              <h3>{book.name}</h3>
-              <p>
-                {book.mapCount} {book.mapCount === 1 ? 'mapa visível' : 'mapas visíveis'} quando
-                o compartilhamento for definido.
-              </p>
-              <button type="button" className="ghost-button" disabled>
-                Em breve
-              </button>
-            </article>
-          ))}
-        </section>
-      )}
+      <section className="player-join-card">
+        <label>
+          Servidor de sinalização
+          <input
+            value={signalingUrl}
+            onChange={(event) => setSignalingUrl(event.target.value)}
+            placeholder="ws://localhost:8787"
+          />
+        </label>
+        <label>
+          Nome do jogador
+          <input
+            value={playerDisplayName}
+            onChange={(event) => setPlayerDisplayName(event.target.value)}
+            placeholder="Ex: Eldrin"
+          />
+        </label>
+        <label>
+          Token de convite
+          <input
+            value={playerInviteToken}
+            onChange={(event) => setPlayerInviteToken(event.target.value)}
+            placeholder="invite_xxx..."
+          />
+        </label>
+        <button type="button" className="primary-button" onClick={() => void joinAsPlayer()}>
+          Entrar na campanha
+        </button>
+        <p>{playerConnectionState}</p>
+        {playerIdentity ? (
+          <small>Identidade local: {playerIdentity.fingerprint}</small>
+        ) : null}
+      </section>
+
+      <section className="book-grid">
+        {playerBooks.map((book) => (
+          <article className="book-card muted" key={book.id}>
+            <p className="book-meta">Somente leitura</p>
+            <h3>{book.name}</h3>
+            <p>
+              {book.mapCount} {book.mapCount === 1 ? 'mapa preparado' : 'mapas preparados'} para
+              sessão de jogo.
+            </p>
+          </article>
+        ))}
+      </section>
     </main>
   )
 
@@ -809,18 +1377,15 @@ function App() {
         <div>
           <p className="eyebrow">Sobre</p>
           <h2>Informações técnicas</h2>
-          <p className="screen-copy">Resumo público do projeto e da implementação atual.</p>
+          <p className="screen-copy">
+            Arquitetura atual com separação entre narrador e jogador em rede.
+          </p>
         </div>
         <button type="button" className="ghost-button" onClick={() => setScreen('home')}>
           Voltar
         </button>
       </header>
-
       <section className="about-grid">
-        <article className="book-card">
-          <h3>Projeto</h3>
-          <p>Aplicação web para criação e navegação de livros de mapas de fantasia.</p>
-        </article>
         <article className="book-card">
           <h3>Developer</h3>
           <p>Rodrigo Viana</p>
@@ -830,12 +1395,24 @@ function App() {
           <p>MIT License</p>
         </article>
         <article className="book-card">
-          <h3>Tecnologias</h3>
-          <p>React, TypeScript, Vite, Fabric.js, Dexie, IndexedDB e GitHub Pages.</p>
+          <h3>Rede</h3>
+          <p>
+            Sinalização por WebSocket com lobby, ACL, rotação de convites, aprovação manual e
+            sincronização em tempo real do estado do mapa.
+          </p>
+        </article>
+        <article className="book-card">
+          <h3>Identidade</h3>
+          <p>
+            Jogador usa chave assimétrica local no navegador (Web Crypto + IndexedDB) para
+            desafio-resposta.
+          </p>
         </article>
       </section>
     </main>
   )
+
+  const isNarratorStudio = studioRole === 'narrator'
 
   const renderStudio = () => (
     <>
@@ -844,105 +1421,122 @@ function App() {
           ← Livros
         </button>
         <div className="brand">Neverending Fantasy Map Studio</div>
-        <div className="book-badge">{currentBook?.name ?? 'Livro sem nome'}</div>
-        <div className="tabs">
-          {bookMaps.map((map) => (
-            <button
-              type="button"
-              className={`tab ${map.id === currentMapId ? 'active' : ''}`}
-              key={map.id}
-              onClick={() => {
-                void switchTab(map.id)
-              }}
-            >
-              <span>{map.name}</span>
-              {bookMaps.length > 1 ? (
-                <span
-                  className="close-tab"
-                  onClick={(event) => {
-                    event.stopPropagation()
-                    void closeTab(map.id)
-                  }}
-                  aria-label={`Fechar ${map.name}`}
-                >
-                  ✕
-                </span>
-              ) : null}
-            </button>
-          ))}
+        <div className="book-badge">
+          {isNarratorStudio ? currentBook?.name ?? 'Livro sem nome' : 'Modo Jogador (leitura)'}
         </div>
-        <button type="button" className="tab-add" title="Novo mapa" onClick={() => void addMapTab()}>
-          +
-        </button>
-        <div className="mode-toggle">
-          <button
-            type="button"
-            className={editMode ? 'active' : ''}
-            onClick={() => setEditMode(true)}
-          >
-            ✎ Edição
-          </button>
-          <button
-            type="button"
-            className={!editMode ? 'active' : ''}
-            onClick={() => setEditMode(false)}
-          >
-            ▶ Visualização
-          </button>
-        </div>
-      </header>
-
-      <div className="workspace">
-        <aside className={`sidebar ${sidebarCollapsed ? 'collapsed' : ''}`}>
-          <div className="sidebar-head">
-            <span>Estruturas</span>
-            <button
-              type="button"
-              className="collapse-btn"
-              onClick={() => setSidebarCollapsed((previous) => !previous)}
-            >
-              {sidebarCollapsed ? '›' : '‹'}
-            </button>
-          </div>
-          <div className="asset-body">
-            <label className="upload-btn">
-              + Carregar estrutura
-              <input type="file" accept="image/*" multiple hidden onChange={handleAssetUpload} />
-            </label>
-            <div className="asset-grid">
-              {assets.map((asset) => (
+        {isNarratorStudio ? (
+          <>
+            <div className="tabs">
+              {bookMaps.map((map) => (
                 <button
                   type="button"
-                  className={`asset-item ${asset.id === stampAssetId ? 'selected' : ''}`}
-                  key={asset.id}
-                  title="Clique e depois clique no mapa para posicionar"
-                  onClick={() =>
-                    setStampAssetId((current) => (current === asset.id ? null : asset.id))
-                  }
+                  className={`tab ${map.id === currentMapId ? 'active' : ''}`}
+                  key={map.id}
+                  onClick={() => {
+                    void switchTab(map.id)
+                  }}
                 >
-                  <img src={asset.dataUrl} alt={asset.name} />
-                  <div className="label">{asset.name}</div>
+                  <span>{map.name}</span>
+                  {bookMaps.length > 1 ? (
+                    <span
+                      className="close-tab"
+                      onClick={(event) => {
+                        event.stopPropagation()
+                        void closeTab(map.id)
+                      }}
+                      aria-label={`Fechar ${map.name}`}
+                    >
+                      ✕
+                    </span>
+                  ) : null}
                 </button>
               ))}
             </div>
-            {assets.length === 0 ? (
-              <div className="asset-empty">
-                Nenhuma estrutura ainda.
-                <br />
-                Envie casas, torres, fogueiras...
-              </div>
-            ) : null}
-            <div className={`stamp-hint ${stampAssetId ? 'active' : ''}`}>
-              🖌️ Modo carimbo ativo — clique no mapa para posicionar.
+            <button
+              type="button"
+              className="tab-add"
+              title="Novo mapa"
+              onClick={() => void addMapTab()}
+            >
+              +
+            </button>
+            <div className="mode-toggle">
+              <button
+                type="button"
+                className={editMode ? 'active' : ''}
+                onClick={() => setEditMode(true)}
+              >
+                ✎ Edição
+              </button>
+              <button
+                type="button"
+                className={!editMode ? 'active' : ''}
+                onClick={() => setEditMode(false)}
+              >
+                ▶ Visualização
+              </button>
             </div>
-          </div>
-        </aside>
+          </>
+        ) : (
+          <div className="player-badge">Somente visualização · sem edição de objetos</div>
+        )}
+      </header>
+
+      <div className="workspace">
+        {isNarratorStudio ? (
+          <aside className={`sidebar ${sidebarCollapsed ? 'collapsed' : ''}`}>
+            <div className="sidebar-head">
+              <span>Estruturas</span>
+              <button
+                type="button"
+                className="collapse-btn"
+                onClick={() => setSidebarCollapsed((previous) => !previous)}
+              >
+                {sidebarCollapsed ? '›' : '‹'}
+              </button>
+            </div>
+            <div className="asset-body">
+              <label className="upload-btn">
+                + Carregar estrutura
+                <input type="file" accept="image/*" multiple hidden onChange={handleAssetUpload} />
+              </label>
+              <div className="asset-grid">
+                {assets.map((asset) => (
+                  <button
+                    type="button"
+                    className={`asset-item ${asset.id === stampAssetId ? 'selected' : ''}`}
+                    key={asset.id}
+                    title="Clique e depois clique no mapa para posicionar"
+                    onClick={() =>
+                      setStampAssetId((current) => (current === asset.id ? null : asset.id))
+                    }
+                  >
+                    <img src={asset.dataUrl} alt={asset.name} />
+                    <div className="label">{asset.name}</div>
+                  </button>
+                ))}
+              </div>
+              {assets.length === 0 ? (
+                <div className="asset-empty">
+                  Nenhuma estrutura ainda.
+                  <br />
+                  Envie casas, torres, fogueiras...
+                </div>
+              ) : null}
+              <div className={`stamp-hint ${stampAssetId ? 'active' : ''}`}>
+                🖌️ Modo carimbo ativo — clique no mapa para posicionar.
+              </div>
+            </div>
+          </aside>
+        ) : null}
 
         <main className={`map-area ${stampAssetId ? 'stamping' : ''}`}>
-          <label className="bg-upload-fab">
-            🗺️ Carregar plano de fundo
-            <input type="file" accept="image/*" hidden onChange={handleBackgroundUpload} />
-          </label>
+          {isNarratorStudio ? (
+            <label className="bg-upload-fab">
+              🗺️ Carregar plano de fundo
+              <input type="file" accept="image/*" hidden onChange={handleBackgroundUpload} />
+            </label>
+          ) : null}
           <div className="canvas-frame">
             <canvas
               id="mapCanvas"
@@ -952,76 +1546,77 @@ function App() {
             />
           </div>
           <div className="hint-footer">
-            Passe o mouse sobre uma estrutura para destacá-la · clique em modo Visualização para
-            abrir
+            Passe o mouse sobre uma estrutura para destacá-la · clique para abrir detalhes
           </div>
         </main>
 
-        <aside className={`inspector ${selectedObject && editMode ? 'visible' : ''}`}>
-          <h3>Propriedades</h3>
-          {selectedObject && editMode ? (
-            <>
-              <div className="field">
-                <label htmlFor="fieldTitle">Título</label>
-                <input
-                  id="fieldTitle"
-                  type="text"
-                  value={selectedData.title}
-                  placeholder="Ex: Igreja Abandonada"
-                  onChange={(event) =>
-                    setSelectedData((previous) => ({
-                      ...previous,
-                      title: event.target.value,
-                    }))
-                  }
-                />
-              </div>
-              <div className="field">
-                <label htmlFor="fieldDescription">Descrição / Notas do Mestre (Markdown)</label>
-                <textarea
-                  id="fieldDescription"
-                  value={selectedData.description}
-                  placeholder="Detalhes, lore, gatilhos de narrativa..."
-                  onChange={(event) =>
-                    setSelectedData((previous) => ({
-                      ...previous,
-                      description: event.target.value,
-                    }))
-                  }
-                />
-              </div>
-              <div className="field">
-                <label htmlFor="fieldLink">Link externo (opcional)</label>
-                <input
-                  id="fieldLink"
-                  type="url"
-                  value={selectedData.link}
-                  placeholder="https://..."
-                  onChange={(event) =>
-                    setSelectedData((previous) => ({
-                      ...previous,
-                      link: event.target.value,
-                    }))
-                  }
-                />
-              </div>
-              <div className="inspector-actions">
-                <button type="button" className="btn btn-save" onClick={() => void saveInspector()}>
-                  Salvar
-                </button>
-                <button
-                  type="button"
-                  className="btn btn-delete"
-                  onClick={() => void removeSelectedObject()}
-                >
-                  Remover
-                </button>
-              </div>
-            </>
-          ) : (
-            <p className="inspector-empty">Selecione uma estrutura no modo de edição.</p>
-          )}
-        </aside>
+        {isNarratorStudio ? (
+          <aside className={`inspector ${selectedObject && editMode ? 'visible' : ''}`}>
+            <h3>Propriedades</h3>
+            {selectedObject && editMode ? (
+              <>
+                <div className="field">
+                  <label htmlFor="fieldTitle">Título</label>
+                  <input
+                    id="fieldTitle"
+                    type="text"
+                    value={selectedData.title}
+                    placeholder="Ex: Igreja Abandonada"
+                    onChange={(event) =>
+                      setSelectedData((previous) => ({
+                        ...previous,
+                        title: event.target.value,
+                      }))
+                    }
+                  />
+                </div>
+                <div className="field">
+                  <label htmlFor="fieldDescription">Descrição / Notas do Mestre (Markdown)</label>
+                  <textarea
+                    id="fieldDescription"
+                    value={selectedData.description}
+                    placeholder="Detalhes, lore, gatilhos de narrativa..."
+                    onChange={(event) =>
+                      setSelectedData((previous) => ({
+                        ...previous,
+                        description: event.target.value,
+                      }))
+                    }
+                  />
+                </div>
+                <div className="field">
+                  <label htmlFor="fieldLink">Link externo (opcional)</label>
+                  <input
+                    id="fieldLink"
+                    type="url"
+                    value={selectedData.link}
+                    placeholder="https://..."
+                    onChange={(event) =>
+                      setSelectedData((previous) => ({
+                        ...previous,
+                        link: event.target.value,
+                      }))
+                    }
+                  />
+                </div>
+                <div className="inspector-actions">
+                  <button type="button" className="btn btn-save" onClick={() => void saveInspector()}>
+                    Salvar
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-delete"
+                    onClick={() => void removeSelectedObject()}
+                  >
+                    Remover
+                  </button>
+                </div>
+              </>
+            ) : (
+              <p className="inspector-empty">Selecione uma estrutura no modo de edição.</p>
+            )}
+          </aside>
+        ) : null}
       </div>
 
       <div
@@ -1054,22 +1649,24 @@ function App() {
     </>
   )
 
+  useEffect(() => {
+    return () => {
+      closeSocket()
+    }
+  }, [closeSocket])
+
   if (screen === 'home') {
     return renderHome()
   }
-
   if (screen === 'narrator') {
     return renderNarrator()
   }
-
   if (screen === 'player') {
     return renderPlayer()
   }
-
   if (screen === 'about') {
     return renderAbout()
   }
-
   return renderStudio()
 }
 
