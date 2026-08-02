@@ -110,29 +110,16 @@ async function fileToDataURL(file: File): Promise<string> {
 
 function getStructureData(object: FabricObject | undefined | null): StructureMeta {
   if (!object) {
-    return { title: '', description: '', link: '' }
+    return { title: '', description: '' }
   }
   const data = object.get('data')
   if (!data || typeof data !== 'object') {
-    return { title: '', description: '', link: '' }
+    return { title: '', description: '' }
   }
   const source = data as Partial<StructureMeta>
   return {
     title: source.title ?? '',
     description: source.description ?? '',
-    link: source.link ?? '',
-  }
-}
-
-function isSafeUrl(url: string): boolean {
-  if (!url.trim()) {
-    return false
-  }
-  try {
-    const parsed = new URL(url)
-    return parsed.protocol === 'http:' || parsed.protocol === 'https:'
-  } catch {
-    return false
   }
 }
 
@@ -167,7 +154,6 @@ function App() {
   const [selectedData, setSelectedData] = useState<StructureMeta>({
     title: '',
     description: '',
-    link: '',
   })
   const [modalContent, setModalContent] = useState<ModalContent | null>(null)
   const [signalingUrl, setSignalingUrl] = useState(getInitialSignalingUrl)
@@ -185,6 +171,13 @@ function App() {
   const [latestInstallerVersion, setLatestInstallerVersion] = useState<string | null>(null)
   const [installerReleaseUrl, setInstallerReleaseUrl] = useState<string | null>(null)
   const [showUpdateNotice, setShowUpdateNotice] = useState(true)
+  const [editingBookId, setEditingBookId] = useState<string | null>(null)
+  const [editingBookName, setEditingBookName] = useState('')
+  const [editingMapId, setEditingMapId] = useState<string | null>(null)
+  const [editingMapName, setEditingMapName] = useState('')
+  const [editingAssetId, setEditingAssetId] = useState<string | null>(null)
+  const [editingAssetName, setEditingAssetName] = useState('')
+  const [notesPreview, setNotesPreview] = useState(false)
 
   useEffect(() => {
     currentMapIdRef.current = currentMapId
@@ -542,7 +535,6 @@ function App() {
           setModalContent({
             title: data.title || 'Estrutura sem nome',
             description: data.description || '(sem descrição registrada)',
-            link: data.link,
           })
         }
         return
@@ -581,7 +573,7 @@ function App() {
           transparentCorners: false,
           cornerStyle: 'circle',
           cornerSize: 9,
-          data: { title: selectedAsset.name, description: '', link: '' } as StructureMeta,
+          data: { title: selectedAsset.name, description: '' } as StructureMeta,
         })
         canvas.add(image)
         canvas.setActiveObject(image)
@@ -597,7 +589,6 @@ function App() {
         setModalContent({
           title: data.title || 'Estrutura sem nome',
           description: data.description || '(sem descrição registrada)',
-          link: data.link,
         })
       }
     }
@@ -1192,6 +1183,54 @@ function App() {
     return buildInviteUri(window.location.href.split('?')[0], book.inviteToken)
   }, [])
 
+  const saveBookName = useCallback(async () => {
+    if (!editingBookId) return
+    const trimmed = editingBookName.trim()
+    if (trimmed) {
+      const now = Date.now()
+      await db.books.update(editingBookId, { name: trimmed, updatedAt: now })
+      setBooks((prev) => prev.map((b) => (b.id === editingBookId ? { ...b, name: trimmed, updatedAt: now } : b)))
+    }
+    setEditingBookId(null)
+  }, [editingBookId, editingBookName])
+
+  const startEditBookName = useCallback((book: BookRecord) => {
+    setEditingBookId(book.id)
+    setEditingBookName(book.name)
+  }, [])
+
+  const saveMapName = useCallback(async () => {
+    if (!editingMapId) return
+    const trimmed = editingMapName.trim()
+    if (trimmed) {
+      await db.maps.update(editingMapId, { name: trimmed })
+      setMaps((prev) => prev.map((m) => (m.id === editingMapId ? { ...m, name: trimmed } : m)))
+    }
+    setEditingMapId(null)
+  }, [editingMapId, editingMapName])
+
+  const saveAssetName = useCallback(async () => {
+    if (!editingAssetId) return
+    const trimmed = editingAssetName.trim()
+    if (trimmed) {
+      await db.assets.update(editingAssetId, { name: trimmed })
+      setAssets((prev) => prev.map((a) => (a.id === editingAssetId ? { ...a, name: trimmed } : a)))
+    }
+    setEditingAssetId(null)
+  }, [editingAssetId, editingAssetName])
+
+  const insertImageIntoNotes = useCallback(
+    async (event: ChangeEvent<HTMLInputElement>) => {
+      const file = event.target.files?.[0]
+      if (!file) return
+      const dataUrl = await fileToDataURL(file)
+      const mdImage = `\n![${file.name.replace(/\.[^.]+$/, '')}](${dataUrl})\n`
+      setSelectedData((prev) => ({ ...prev, description: prev.description + mdImage }))
+      event.target.value = ''
+    },
+    [],
+  )
+
   const renderHome = () => (
     <main className="shell home-shell">
       <section className="home-hero">
@@ -1298,7 +1337,28 @@ function App() {
                 <p className="book-meta">
                   {mapCount} {mapCount === 1 ? 'mapa' : 'mapas'}
                 </p>
-                <h3>{book.name}</h3>
+                {editingBookId === book.id ? (
+                  <input
+                    className="inline-edit"
+                    autoFocus
+                    value={editingBookName}
+                    onChange={(event) => setEditingBookName(event.target.value)}
+                    onBlur={() => void saveBookName()}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter') void saveBookName()
+                      if (event.key === 'Escape') setEditingBookId(null)
+                    }}
+                  />
+                ) : (
+                  <h3
+                    className="editable-title"
+                    title="Duplo clique para renomear"
+                    onDoubleClick={() => startEditBookName(book)}
+                  >
+                    {book.name}
+                    <span className="edit-hint">✎</span>
+                  </h3>
+                )}
                 <p>{book.description}</p>
                 <div className="book-actions">
                   <button type="button" className="primary-button" onClick={() => void openBook(book.id)}>
@@ -1518,10 +1578,35 @@ function App() {
                   className={`tab ${map.id === currentMapId ? 'active' : ''}`}
                   key={map.id}
                   onClick={() => {
-                    void switchTab(map.id)
+                    if (editingMapId !== map.id) void switchTab(map.id)
                   }}
                 >
-                  <span>{map.name}</span>
+                  {editingMapId === map.id ? (
+                    <input
+                      className="tab-rename-input"
+                      autoFocus
+                      value={editingMapName}
+                      onClick={(event) => event.stopPropagation()}
+                      onChange={(event) => setEditingMapName(event.target.value)}
+                      onBlur={() => void saveMapName()}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter') void saveMapName()
+                        if (event.key === 'Escape') setEditingMapId(null)
+                        event.stopPropagation()
+                      }}
+                    />
+                  ) : (
+                    <span
+                      onDoubleClick={(event) => {
+                        event.stopPropagation()
+                        setEditingMapId(map.id)
+                        setEditingMapName(map.name)
+                      }}
+                      title="Duplo clique para renomear"
+                    >
+                      {map.name}
+                    </span>
+                  )}
                   {bookMaps.length > 1 ? (
                     <span
                       className="close-tab"
@@ -1587,18 +1672,45 @@ function App() {
               </label>
               <div className="asset-grid">
                 {assets.map((asset) => (
-                  <button
-                    type="button"
+                  <div
                     className={`asset-item ${asset.id === stampAssetId ? 'selected' : ''}`}
                     key={asset.id}
-                    title="Clique e depois clique no mapa para posicionar"
-                    onClick={() =>
-                      setStampAssetId((current) => (current === asset.id ? null : asset.id))
-                    }
                   >
-                    <img src={asset.dataUrl} alt={asset.name} />
-                    <div className="label">{asset.name}</div>
-                  </button>
+                    <button
+                      type="button"
+                      className="asset-thumb"
+                      title="Clique e depois clique no mapa para posicionar"
+                      onClick={() =>
+                        setStampAssetId((current) => (current === asset.id ? null : asset.id))
+                      }
+                    >
+                      <img src={asset.dataUrl} alt={asset.name} />
+                    </button>
+                    {editingAssetId === asset.id ? (
+                      <input
+                        className="asset-name-input"
+                        autoFocus
+                        value={editingAssetName}
+                        onChange={(event) => setEditingAssetName(event.target.value)}
+                        onBlur={() => void saveAssetName()}
+                        onKeyDown={(event) => {
+                          if (event.key === 'Enter') void saveAssetName()
+                          if (event.key === 'Escape') setEditingAssetId(null)
+                        }}
+                      />
+                    ) : (
+                      <div
+                        className="label editable-label"
+                        title="Duplo clique para renomear"
+                        onDoubleClick={() => {
+                          setEditingAssetId(asset.id)
+                          setEditingAssetName(asset.name)
+                        }}
+                      >
+                        {asset.name}
+                      </div>
+                    )}
+                  </div>
                 ))}
               </div>
               {assets.length === 0 ? (
@@ -1656,47 +1768,52 @@ function App() {
                   />
                 </div>
                 <div className="field">
-                  <label htmlFor="fieldDescription">Descrição / Notas do Mestre (Markdown)</label>
-                  <textarea
-                    id="fieldDescription"
-                    value={selectedData.description}
-                    placeholder="Detalhes, lore, gatilhos de narrativa..."
-                    onChange={(event) =>
-                      setSelectedData((previous) => ({
-                        ...previous,
-                        description: event.target.value,
-                      }))
-                    }
-                  />
-                </div>
-                <div className="field">
-                  <label htmlFor="fieldLink">Link externo (opcional)</label>
-                  <input
-                    id="fieldLink"
-                    type="url"
-                    value={selectedData.link}
-                    placeholder="https://..."
-                    onChange={(event) =>
-                      setSelectedData((previous) => ({
-                        ...previous,
-                        link: event.target.value,
-                      }))
-                    }
-                  />
-                </div>
-                <div className="inspector-actions">
-                  <button type="button" className="btn btn-save" onClick={() => void saveInspector()}>
-                    Salvar
-                  </button>
-                  <button
-                    type="button"
-                    className="btn btn-delete"
-                    onClick={() => void removeSelectedObject()}
-                  >
-                    Remover
-                  </button>
-                </div>
-              </>
+                      <div className="field-header">
+                        <label htmlFor="fieldDescription">Notas do Mestre (Markdown)</label>
+                        <button
+                          type="button"
+                          className="preview-toggle"
+                          onClick={() => setNotesPreview((prev) => !prev)}
+                        >
+                          {notesPreview ? 'Editar' : 'Pré-ver'}
+                        </button>
+                      </div>
+                      {notesPreview ? (
+                        <div
+                          className="notes-preview"
+                          dangerouslySetInnerHTML={{ __html: markdownToHtml(selectedData.description) }}
+                        />
+                      ) : (
+                        <textarea
+                          id="fieldDescription"
+                          value={selectedData.description}
+                          placeholder="Detalhes, lore, gatilhos de narrativa... Markdown suportado."
+                          onChange={(event) =>
+                            setSelectedData((previous) => ({
+                              ...previous,
+                              description: event.target.value,
+                            }))
+                          }
+                        />
+                      )}
+                      <label className="insert-image-btn">
+                        📎 Inserir imagem
+                        <input type="file" accept="image/*" hidden onChange={insertImageIntoNotes} />
+                      </label>
+                    </div>
+                    <div className="inspector-actions">
+                      <button type="button" className="btn btn-save" onClick={() => void saveInspector()}>
+                        Salvar
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn-delete"
+                        onClick={() => void removeSelectedObject()}
+                      >
+                        Remover
+                      </button>
+                    </div>
+                  </>
             ) : (
               <p className="inspector-empty">Selecione uma estrutura no modo de edição.</p>
             )}
@@ -1718,16 +1835,6 @@ function App() {
               className="modal-desc"
               dangerouslySetInnerHTML={{ __html: markdownToHtml(modalContent.description) }}
             />
-            {isSafeUrl(modalContent.link) ? (
-              <a
-                className="modal-link"
-                href={modalContent.link}
-                target="_blank"
-                rel="noopener noreferrer"
-              >
-                Abrir link ↗
-              </a>
-            ) : null}
           </div>
         ) : null}
       </div>
