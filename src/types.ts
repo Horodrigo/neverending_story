@@ -4,6 +4,14 @@ export interface StructureMeta {
   link: string
 }
 
+export interface BookRecord {
+  id: string
+  name: string
+  description: string
+  createdAt: number
+  updatedAt: number
+}
+
 export interface AssetRecord {
   id: string
   name: string
@@ -13,6 +21,7 @@ export interface AssetRecord {
 
 export interface MapRecord {
   id: string
+  bookId: string
   name: string
   position: number
   json: string | null

@@ -1,24 +1,29 @@
 # Neverending Fantasy Map Studio
 
-Aplicativo web responsivo para criar mapas de fantasia interativos com múltiplas abas (estilo livro), biblioteca de estruturas persistida localmente e objetos clicáveis com metadados narrativos.
+Aplicação web para montar livros de mapas de fantasia diretamente no navegador.
 
-## Stack
+## O que faz
 
-- React + TypeScript + Vite
-- Fabric.js (canvas, drag/resize/rotate, hover glow)
-- Dexie + IndexedDB (persistência local de mapas e assets)
-- Marked + DOMPurify (renderização segura de descrição em Markdown)
+- organiza mapas em livros
+- permite carregar uma imagem de fundo para cada mapa
+- permite adicionar estruturas visuais sobre o mapa
+- salva dados localmente no navegador
+- oferece modo de edição e modo de visualização
 
-## Funcionalidades implementadas
+## Como usar
 
-- Abas de mapas com estado persistido por página
-- Upload de plano de fundo por mapa
-- Biblioteca de estruturas com upload local e persistência em IndexedDB
-- Carimbo de estruturas no mapa com clique em coordenada
-- Modo Edição e Modo Visualização
-- Hover highlight (glow) nas estruturas
-- Modal narrativo ao clicar no objeto em modo Visualização
-- Inspector lateral com título, descrição e link externo por estrutura
+Na tela inicial, escolha uma das áreas:
+
+- **Narrador**: cria e gerencia livros de mapas
+- **Jogador**: área visual preparada para acesso em modo leitura
+- **Sobre**: resumo técnico e autoria
+
+Dentro de um livro do narrador, você pode:
+
+- criar novas páginas de mapa
+- enviar imagens para o fundo do mapa
+- carregar estruturas para usar como marcadores
+- posicionar, mover e configurar cada estrutura
 
 ## Desenvolvimento local
 
@@ -33,14 +38,6 @@ npm run dev
 npm run build
 ```
 
-## Deploy no GitHub Pages
+## Licença
 
-O projeto já inclui workflow em `.github/workflows/deploy-pages.yml`.
-
-Passos no GitHub:
-
-1. Abrir **Settings > Pages**.
-2. Em **Build and deployment**, selecionar **GitHub Actions**.
-3. Fazer push na branch `main`.
-
-O `vite.config.ts` já está configurado com `base: "/neverending_story/"` para o repositório `Horodrigo/neverending_story`.
+[MIT](./LICENSE)

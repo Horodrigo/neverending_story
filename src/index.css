@@ -1,6 +1,7 @@
 :root {
   --ink: #151a24;
   --ink-2: #1d2433;
+  --ink-3: #232c3d;
   --parchment: #e8dcc0;
   --parchment-dim: #cabf9f;
   --ember: #c8862f;
@@ -27,13 +28,227 @@ body {
   background: radial-gradient(ellipse at 50% -10%, #2a3247 0%, var(--ink) 55%), var(--ink);
   color: var(--parchment);
   font-family: var(--font-body);
-  overflow: hidden;
 }
 
 button,
 input,
 textarea {
   font-family: inherit;
+}
+
+button {
+  border: none;
+}
+
+.shell {
+  min-height: 100%;
+}
+
+.home-shell,
+.screen-shell {
+  padding: 28px;
+}
+
+.home-hero {
+  max-width: 1080px;
+  margin: 0 auto;
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 18px;
+}
+
+.eyebrow {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: 12px;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: var(--ember-bright);
+}
+
+.home-hero h1,
+.screen-header h2 {
+  margin: 0;
+  font-family: var(--font-display);
+  color: var(--parchment);
+}
+
+.home-hero h1 {
+  max-width: 760px;
+  font-size: clamp(2.4rem, 5vw, 4.5rem);
+  line-height: 1.05;
+}
+
+.home-copy,
+.screen-copy {
+  margin: 0;
+  max-width: 720px;
+  font-size: 1.15rem;
+  line-height: 1.6;
+  color: var(--parchment-dim);
+}
+
+.home-actions,
+.book-grid,
+.about-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 18px;
+}
+
+.portal-card,
+.book-card {
+  background: linear-gradient(180deg, rgb(35 43 61 / 92%) 0%, rgb(21 26 36 / 96%) 100%);
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  padding: 22px;
+  color: inherit;
+  text-align: left;
+  box-shadow: 0 24px 60px rgb(0 0 0 / 20%);
+}
+
+.portal-card {
+  cursor: pointer;
+  min-height: 220px;
+  transition: transform 0.15s ease, border-color 0.15s ease;
+}
+
+.portal-card:hover {
+  transform: translateY(-2px);
+  border-color: var(--ember);
+}
+
+.portal-title {
+  display: block;
+  margin-bottom: 12px;
+  font-family: var(--font-display);
+  font-size: 1.4rem;
+  color: var(--ember-bright);
+}
+
+.portal-copy,
+.book-card p {
+  margin: 0;
+  font-size: 1.05rem;
+  line-height: 1.55;
+  color: var(--parchment-dim);
+}
+
+.screen-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+  margin: 0 auto 28px;
+  max-width: 1160px;
+}
+
+.screen-actions {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.ghost-button,
+.primary-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 42px;
+  padding: 10px 16px;
+  border-radius: 999px;
+  font-family: var(--font-display);
+  font-size: 0.78rem;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.ghost-button {
+  background: rgb(26 33 48 / 88%);
+  color: var(--parchment);
+  border: 1px solid var(--line);
+}
+
+.ghost-button:hover:not(:disabled) {
+  border-color: var(--ember);
+  color: var(--ember-bright);
+}
+
+.ghost-button:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+.compact {
+  flex-shrink: 0;
+}
+
+.primary-button {
+  background: linear-gradient(180deg, var(--ember-bright) 0%, var(--ember) 100%);
+  color: #251606;
+}
+
+.primary-button:hover {
+  filter: brightness(1.04);
+}
+
+.empty-state {
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 34px 28px;
+  background: rgb(26 33 48 / 86%);
+  border: 1px dashed var(--line);
+  border-radius: 18px;
+  text-align: center;
+}
+
+.empty-state h3,
+.book-card h3 {
+  margin: 0 0 12px;
+  font-family: var(--font-display);
+  color: var(--parchment);
+}
+
+.empty-state p {
+  margin: 0 auto 20px;
+  max-width: 560px;
+  color: var(--parchment-dim);
+  font-size: 1.05rem;
+  line-height: 1.55;
+}
+
+.book-grid,
+.about-grid {
+  max-width: 1160px;
+  margin: 0 auto;
+}
+
+.book-meta {
+  margin-bottom: 8px;
+  font-family: var(--font-display);
+  font-size: 0.8rem;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--ember-bright);
+}
+
+.book-card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.book-card.muted {
+  opacity: 0.8;
+}
+
+.book-card button {
+  margin-top: auto;
+  align-self: flex-start;
 }
 
 .topbar {
@@ -53,6 +268,15 @@ textarea {
   letter-spacing: 1.6px;
   color: var(--ember-bright);
   text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.book-badge {
+  padding: 7px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  color: var(--parchment-dim);
+  background: rgb(21 26 36 / 70%);
   white-space: nowrap;
 }
 
@@ -139,7 +363,6 @@ textarea {
   text-transform: uppercase;
   background: transparent;
   color: var(--parchment-dim);
-  border: none;
   cursor: pointer;
 }
 
@@ -232,12 +455,13 @@ textarea {
 }
 
 .asset-item {
-  background: #232c3d;
+  background: var(--ink-3);
   border: 1px solid var(--line);
   border-radius: 6px;
   padding: 6px;
   cursor: grab;
   text-align: center;
+  color: inherit;
 }
 
 .asset-item:hover {
@@ -307,7 +531,10 @@ textarea {
 
 .canvas-frame {
   position: relative;
-  box-shadow: 0 0 0 1px var(--line), 0 20px 60px rgb(0 0 0 / 60%), inset 0 0 60px rgb(0 0 0 / 50%);
+  box-shadow:
+    0 0 0 1px var(--line),
+    0 20px 60px rgb(0 0 0 / 60%),
+    inset 0 0 60px rgb(0 0 0 / 50%);
   border-radius: 4px;
 }
 
@@ -508,7 +735,6 @@ textarea {
   top: 10px;
   left: 12px;
   background: none;
-  border: none;
   font-size: 20px;
   cursor: pointer;
   color: #7a6a48;
@@ -548,6 +774,21 @@ textarea {
   background: #5c6f4a;
 }
 
+@media (max-width: 1180px) {
+  .topbar {
+    flex-wrap: wrap;
+  }
+
+  .book-badge {
+    order: 4;
+  }
+
+  .tabs {
+    order: 5;
+    width: 100%;
+  }
+}
+
 @media (max-width: 1100px) {
   .workspace {
     flex-wrap: wrap;
@@ -582,5 +823,32 @@ textarea {
     width: 100%;
     border-left: none;
     border-top: 1px solid var(--line);
+  }
+}
+
+@media (max-width: 760px) {
+  .home-shell,
+  .screen-shell {
+    padding: 18px;
+  }
+
+  .screen-header {
+    flex-direction: column;
+  }
+
+  .screen-actions {
+    width: 100%;
+  }
+
+  .screen-actions > * {
+    flex: 1;
+  }
+
+  .topbar {
+    padding: 12px;
+  }
+
+  .brand {
+    width: 100%;
   }
 }
