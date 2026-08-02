@@ -59,6 +59,17 @@ const DEFAULT_SIGNALING_URL =
     ? `ws://${window.location.hostname || 'localhost'}:8787`
     : 'ws://localhost:8787'
 
+function getInitialSignalingUrl(): string {
+  if (typeof window === 'undefined') {
+    return DEFAULT_SIGNALING_URL
+  }
+  const fromQuery = new URL(window.location.href).searchParams.get('signaling')
+  if (fromQuery && fromQuery.startsWith('ws')) {
+    return fromQuery
+  }
+  return localStorage.getItem('mapstudio_signaling_url') ?? DEFAULT_SIGNALING_URL
+}
+
 if (!FabricObject.customProperties.includes('data')) {
   FabricObject.customProperties = [...FabricObject.customProperties, 'data']
 }
@@ -159,9 +170,7 @@ function App() {
     link: '',
   })
   const [modalContent, setModalContent] = useState<ModalContent | null>(null)
-  const [signalingUrl, setSignalingUrl] = useState(
-    localStorage.getItem('mapstudio_signaling_url') ?? DEFAULT_SIGNALING_URL,
-  )
+  const [signalingUrl, setSignalingUrl] = useState(getInitialSignalingUrl)
   const [connectedRoomBookId, setConnectedRoomBookId] = useState<string | null>(null)
   const [pendingJoins, setPendingJoins] = useState<PendingJoin[]>([])
   const [aclEntries, setAclEntries] = useState<LocalAclRecord[]>([])
