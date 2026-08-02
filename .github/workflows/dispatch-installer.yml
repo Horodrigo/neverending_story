@@ -1,0 +1,29 @@
+name: Dispatch installer build
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger installer repository workflow
+        env:
+          GH_TOKEN: ${{ secrets.CROSS_REPO_PAT_TOKEN }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "CROSS_REPO_PAT_TOKEN secret is not configured."
+            exit 1
+          fi
+          gh api \
+            --method POST \
+            repos/Horodrigo/fantasy_installer/dispatches \
+            -f event_type=source-updated \
+            -f client_payload[source_repo]=Horodrigo/neverending_story \
+            -f client_payload[source_sha]=${GITHUB_SHA} \
+            -f client_payload[source_ref]=${GITHUB_REF_NAME}

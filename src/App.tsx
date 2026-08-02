@@ -173,6 +173,9 @@ function App() {
     'Jogador desconectado. Informe o link de convite para entrar.',
   )
   const [remoteMapJson, setRemoteMapJson] = useState<string | null>(null)
+  const [latestInstallerVersion, setLatestInstallerVersion] = useState<string | null>(null)
+  const [installerReleaseUrl, setInstallerReleaseUrl] = useState<string | null>(null)
+  const [showUpdateNotice, setShowUpdateNotice] = useState(true)
 
   useEffect(() => {
     currentMapIdRef.current = currentMapId
@@ -225,6 +228,11 @@ function App() {
     [maps, sortedBooks],
   )
 
+  const hasUpdateAvailable =
+    !!latestInstallerVersion &&
+    latestInstallerVersion !== __APP_VERSION__ &&
+    showUpdateNotice
+
   useEffect(() => {
     localStorage.setItem('mapstudio_signaling_url', signalingUrl)
   }, [signalingUrl])
@@ -238,6 +246,36 @@ function App() {
       setPlayerInviteToken(invite)
     }
   }, [playerInviteToken, screen])
+
+  useEffect(() => {
+    let cancelled = false
+    const releaseRepo = __INSTALLER_RELEASE_REPO__
+    void fetch(`https://api.github.com/repos/${releaseRepo}/releases/latest`)
+      .then(async (response) => {
+        if (!response.ok) {
+          return null
+        }
+        return (await response.json()) as {
+          tag_name?: string
+          html_url?: string
+        }
+      })
+      .then((release) => {
+        if (!release || cancelled) {
+          return
+        }
+        const tag = release.tag_name ?? ''
+        const normalized = tag.replace(/^v/i, '')
+        setInstallerReleaseUrl(release.html_url ?? null)
+        setLatestInstallerVersion(normalized || null)
+      })
+      .catch(() => {
+        setLatestInstallerVersion(null)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   const clearCanvas = useCallback(() => {
     const canvas = canvasRef.current
@@ -1148,11 +1186,26 @@ function App() {
   const renderHome = () => (
     <main className="shell home-shell">
       <section className="home-hero">
+        {hasUpdateAvailable ? (
+          <div className="update-banner">
+            <strong>Nova versão disponível:</strong> {latestInstallerVersion}
+            <div className="update-actions">
+              {installerReleaseUrl ? (
+                <a href={installerReleaseUrl} target="_blank" rel="noopener noreferrer">
+                  Atualizar
+                </a>
+              ) : null}
+              <button type="button" onClick={() => setShowUpdateNotice(false)}>
+                Agora não
+              </button>
+            </div>
+          </div>
+        ) : null}
         <p className="eyebrow">Neverending Fantasy Map Studio</p>
         <h1>Escolha como deseja entrar no livro de mapas.</h1>
         <p className="home-copy">
-          Narrador controla sessão, convites e sincronização. Jogador acessa apenas leitura em
-          tempo real.
+          Aplicação instalada em desktop: narrador e jogador usam o navegador local, com sessão
+          em tempo real e autenticação por chave.
         </p>
         <div className="home-actions">
           <button type="button" className="portal-card" onClick={() => setScreen('narrator')}>
@@ -1208,6 +1261,10 @@ function App() {
           />
         </label>
         <p>{networkMessage || 'Conecte um livro para habilitar lobby e sincronização.'}</p>
+        <small>
+          P2P completo: configure STUN/TURN no host. Priorize Cloudflare quando disponível; para
+          POC, use fallback gratuito com limites de tráfego.
+        </small>
       </section>
 
       {sortedBooks.length === 0 ? (
@@ -1395,10 +1452,29 @@ function App() {
           <p>MIT License</p>
         </article>
         <article className="book-card">
+          <h3>Versão instalada</h3>
+          <p>Atual: {__APP_VERSION__}</p>
+          <p>Última publicada: {latestInstallerVersion ?? 'indisponível'}</p>
+          {installerReleaseUrl ? (
+            <p>
+              <a href={installerReleaseUrl} target="_blank" rel="noopener noreferrer">
+                Ver release do instalador
+              </a>
+            </p>
+          ) : null}
+        </article>
+        <article className="book-card">
           <h3>Rede</h3>
           <p>
             Sinalização por WebSocket com lobby, ACL, rotação de convites, aprovação manual e
             sincronização em tempo real do estado do mapa.
+          </p>
+        </article>
+        <article className="book-card">
+          <h3>ICE (STUN/TURN)</h3>
+          <p>
+            Configure STUN/TURN no host para P2P amplo. Cloudflare pode ser usado quando disponível
+            na conta; para POC, mantenha fallback gratuito com limitações.
           </p>
         </article>
         <article className="book-card">
