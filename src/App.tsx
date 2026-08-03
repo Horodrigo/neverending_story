@@ -230,10 +230,20 @@ function App() {
     [maps, sortedBooks],
   )
 
-  const hasUpdateAvailable =
-    !!latestInstallerVersion &&
-    latestInstallerVersion !== __APP_VERSION__ &&
-    showUpdateNotice
+  const hasUpdateAvailable = useMemo(() => {
+    if (!latestInstallerVersion || !showUpdateNotice) {
+      return false
+    }
+    const latestInstallerMatch = /^installer-(\d+)$/i.exec(latestInstallerVersion)
+    const currentInstallerBuildIdRaw = __INSTALLER_BUILD_ID__.trim()
+    if (latestInstallerMatch && /^\d+$/.test(currentInstallerBuildIdRaw)) {
+      return Number(latestInstallerMatch[1]) > Number(currentInstallerBuildIdRaw)
+    }
+    if (latestInstallerMatch) {
+      return false
+    }
+    return latestInstallerVersion !== __APP_VERSION__
+  }, [latestInstallerVersion, showUpdateNotice])
 
   useEffect(() => {
     localStorage.setItem('mapstudio_signaling_url', signalingUrl)
@@ -400,7 +410,12 @@ function App() {
       }
       const map = await db.maps.get(mapId)
       if (map?.json) {
-        await canvas.loadFromJSON(map.json)
+        try {
+          const parsed = JSON.parse(map.json)
+          await canvas.loadFromJSON(parsed)
+        } catch {
+          setNetworkMessage('Falha ao carregar mapa salvo localmente.')
+        }
       }
       applyModeToObjects()
       canvas.requestRenderAll()
@@ -541,7 +556,8 @@ function App() {
       }
 
       if (editModeRef.current && stampAssetIdRef.current) {
-        if (event.target) {
+        const canvasBackground = canvas.backgroundImage as FabricObject | undefined
+        if (event.target && event.target !== canvasBackground) {
           return
         }
         const selectedAsset = assetsRef.current.find(
@@ -551,6 +567,9 @@ function App() {
           return
         }
 
+        if (typeof canvas.getScenePoint !== 'function') {
+          return
+        }
         const pointer = canvas.getScenePoint(event.e)
         const image = await FabricImage.fromURL(selectedAsset.dataUrl, {
           crossOrigin: 'anonymous',

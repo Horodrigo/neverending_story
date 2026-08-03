@@ -13,5 +13,6 @@ export default defineConfig({
   define: {
     __APP_VERSION__: JSON.stringify(appPackage.version),
     __INSTALLER_RELEASE_REPO__: JSON.stringify('Horodrigo/fantasy_installer'),
+    __INSTALLER_BUILD_ID__: JSON.stringify(process.env.VITE_INSTALLER_BUILD_ID ?? ''),
   },
 })
