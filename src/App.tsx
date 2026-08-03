@@ -139,6 +139,7 @@ function App() {
   const stampAssetIdRef = useRef<string | null>(null)
   const assetsRef = useRef<AssetRecord[]>([])
   const studioRoleRef = useRef<StudioRole>('narrator')
+  const persistCurrentMapRef = useRef<() => Promise<void>>(async () => {})
 
   const [screen, setScreen] = useState<AppScreen>('home')
   const [studioRole, setStudioRole] = useState<StudioRole>('narrator')
@@ -360,6 +361,10 @@ function App() {
     sendNarratorState(json, mapId)
   }, [selectedBookId, sendNarratorState])
 
+  useEffect(() => {
+    persistCurrentMapRef.current = persistCurrentMap
+  }, [persistCurrentMap])
+
   const applyModeToObjects = useCallback(() => {
     const canvas = canvasRef.current
     if (!canvas) {
@@ -540,7 +545,7 @@ function App() {
     }
 
     const onObjectModified = () => {
-      void persistCurrentMap()
+      void persistCurrentMapRef.current()
     }
 
     const onMouseDown = async (event: { target?: FabricObject; e: MouseEvent }) => {
@@ -599,7 +604,7 @@ function App() {
         canvas.requestRenderAll()
         setSelectedObject(image)
         setSelectedData(getStructureData(image))
-        void persistCurrentMap()
+        void persistCurrentMapRef.current()
         return
       }
 
@@ -626,7 +631,7 @@ function App() {
       canvas.dispose()
       canvasRef.current = null
     }
-  }, [persistCurrentMap, screen])
+  }, [screen])
 
   useEffect(() => {
     if (screen !== 'studio') {
