@@ -400,6 +400,138 @@ button {
   gap: 6px;
 }
 
+/* ─────────────── COMPACT BOOK LIST ─────────────── */
+
+.book-list-compact {
+  max-width: 1200px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.book-item {
+  border-bottom: 1px solid var(--line-soft);
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.book-item:last-child {
+  border-bottom: none;
+}
+
+.book-item:hover {
+  background: rgb(200 134 47 / 8%);
+}
+
+.book-item-header {
+  padding: 12px 16px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  cursor: pointer;
+}
+
+.book-expand-arrow {
+  flex-shrink: 0;
+  width: 20px;
+  text-align: center;
+  color: var(--ember);
+  font-size: 0.9rem;
+  transition: transform 0.15s ease;
+}
+
+.book-item-title {
+  flex-grow: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.book-name {
+  margin: 0;
+  font-family: var(--font-display);
+  color: var(--parchment);
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.book-time {
+  font-size: 0.85rem;
+  color: var(--parchment-dim);
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.pending-badge {
+  background: var(--wax);
+  color: var(--parchment);
+  font-size: 0.75rem;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.book-item.expanded {
+  background: rgb(200 134 47 / 8%);
+}
+
+.book-item.expanded .book-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 16px;
+  border-top: 1px solid var(--line-soft);
+  background: rgb(0 0 0 / 20%);
+}
+
+.book-item.expanded .book-actions button {
+  width: 100%;
+  justify-content: flex-start;
+}
+
+.book-item.expanded .delete-button {
+  color: #e85d5d;
+}
+
+.book-item.expanded .delete-button:hover {
+  border-color: #e85d5d;
+  background: rgb(232 93 93 / 10%);
+}
+
+.book-item.expanded .book-meta {
+  font-size: 0.8rem;
+  color: var(--parchment-dim);
+}
+
+.book-item.expanded .invite-box,
+.book-item.expanded .acl-box {
+  background: rgb(0 0 0 / 35%);
+  border: 1px solid var(--line-soft);
+  border-radius: 6px;
+  padding: 10px 12px;
+  margin-top: 8px;
+}
+
+.book-item.expanded .invite-box p,
+.book-item.expanded .acl-box p {
+  margin: 0 0 8px;
+  font-size: 0.9rem;
+  color: var(--parchment-dim);
+}
+
+.book-item.expanded .invite-box code {
+  display: block;
+  background: rgb(0 0 0 / 30%);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 6px 8px;
+  font-size: 0.85rem;
+  word-break: break-all;
+  margin-bottom: 8px;
+}
+
 /* ─────────────── NETWORK / PLAYER JOIN ─────────────── */
 
 .network-shell,
@@ -551,6 +683,18 @@ button {
   color: var(--ember-bright);
   background: rgb(0 0 0 / 30%);
   font-size: 0.78rem;
+}
+
+.player-read-only-badge {
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid rgb(200 200 200 / 50%);
+  color: rgb(200 200 200);
+  background: rgb(0 0 0 / 50%);
+  font-size: 0.78rem;
+  font-family: var(--font-display);
+  letter-spacing: 0.5px;
+  white-space: nowrap;
 }
 
 /* ─────────────── TABS ─────────────── */
@@ -894,6 +1038,55 @@ button {
 .bg-upload-fab:hover {
   color: var(--ember-bright);
   border-color: var(--ember);
+}
+
+.zoom-controls {
+  position: absolute;
+  bottom: 12px;
+  right: 12px;
+  z-index: 6;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: rgb(18 22 32 / 90%);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  padding: 6px 10px;
+}
+
+.zoom-button {
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgb(255 255 255 / 4%);
+  border: 1px solid var(--line);
+  color: var(--parchment-dim);
+  border-radius: 3px;
+  cursor: pointer;
+  font-size: 16px;
+  font-weight: 600;
+  transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease;
+}
+
+.zoom-button:hover {
+  background: rgb(200 134 47 / 10%);
+  color: var(--ember-bright);
+  border-color: var(--ember);
+}
+
+.zoom-button:active {
+  transform: scale(0.95);
+}
+
+.zoom-level {
+  color: var(--parchment-dim);
+  font-size: 11px;
+  font-family: var(--font-display);
+  letter-spacing: 0.5px;
+  min-width: 40px;
+  text-align: center;
 }
 
 .hint-footer {

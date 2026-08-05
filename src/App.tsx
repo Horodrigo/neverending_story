@@ -183,6 +183,8 @@ function App() {
   const [notesPreview, setNotesPreview] = useState(false)
   const [lobbies, setLobbies] = useState<LobbyInfo[]>([])
   const [lobbiesLoading, setLobbiesLoading] = useState(false)
+  const [expandedBookId, setExpandedBookId] = useState<string | null>(null)
+  const [zoomLevel, setZoomLevel] = useState(100)
 
   useEffect(() => {
     currentMapIdRef.current = currentMapId
@@ -202,6 +204,10 @@ function App() {
 
   useEffect(() => {
     studioRoleRef.current = studioRole
+    // Force editMode to false when studioRole is 'player'
+    if (studioRole === 'player') {
+      setEditMode(false)
+    }
   }, [studioRole])
 
   useEffect(() => {
@@ -423,6 +429,35 @@ function App() {
     canvas.requestRenderAll()
   }, [])
 
+  const applyZoom = useCallback((level: number) => {
+    const canvas = canvasRef.current
+    if (!canvas) {
+      return
+    }
+    const zoomFactor = level / 100
+    canvas.setZoom(zoomFactor)
+    canvas.requestRenderAll()
+  }, [])
+
+  const handleZoom = useCallback((direction: 'in' | 'out') => {
+    setZoomLevel((current) => {
+      const zoomLevels = [50, 75, 100, 125, 150, 200]
+      const currentIndex = zoomLevels.indexOf(current)
+      let newLevel = current
+
+      if (direction === 'in') {
+        const nextIndex = currentIndex + 1
+        newLevel = nextIndex < zoomLevels.length ? zoomLevels[nextIndex] : zoomLevels[zoomLevels.length - 1]
+      } else {
+        const prevIndex = currentIndex - 1
+        newLevel = prevIndex >= 0 ? zoomLevels[prevIndex] : zoomLevels[0]
+      }
+
+      applyZoom(newLevel)
+      return newLevel
+    })
+  }, [applyZoom])
+
   const loadMapOnCanvas = useCallback(
     async (mapId: string | null) => {
       const canvas = canvasRef.current
@@ -446,6 +481,8 @@ function App() {
           }
         }
         applyModeToObjects()
+        applyZoom(100)
+        setZoomLevel(100)
         canvas.requestRenderAll()
         isHydratingRef.current = false
         return
@@ -469,10 +506,12 @@ function App() {
         }
       }
       applyModeToObjects()
+      applyZoom(100)
+      setZoomLevel(100)
       canvas.requestRenderAll()
       isHydratingRef.current = false
     },
-    [applyModeToObjects, clearCanvas],
+    [applyModeToObjects, applyZoom, clearCanvas],
   )
 
   const setupInitialState = useCallback(async () => {
@@ -1415,104 +1454,128 @@ function App() {
           </button>
         </section>
       ) : (
-        <section className="book-grid">
+        <section className="book-list-compact">
           {sortedBooks.map((book) => {
             const mapCount = maps.filter((map) => map.bookId === book.id).length
             const bookAcl = narratorRoomState.aclEntries.filter((entry) => entry.bookId === book.id)
             const bookPending = narratorRoomState.pendingJoins.filter((entry) => entry.bookId === book.id)
+            const isExpanded = expandedBookId === book.id
+            const lastUpdated = new Date(book.updatedAt).toLocaleString('pt-BR')
+
             return (
-              <article className="book-card access-card" key={book.id}>
-                <p className="book-meta">
-                  {mapCount} {mapCount === 1 ? 'mapa' : 'mapas'}
-                </p>
-                {editingBookId === book.id ? (
-                  <input
-                    className="inline-edit"
-                    autoFocus
-                    value={editingBookName}
-                    onChange={(event) => setEditingBookName(event.target.value)}
-                    onBlur={() => void saveBookName()}
-                    onKeyDown={(event) => {
-                      if (event.key === 'Enter') void saveBookName()
-                      if (event.key === 'Escape') setEditingBookId(null)
-                    }}
-                  />
-                ) : (
-                  <h3
-                    className="editable-title"
-                    title="Duplo clique para renomear"
-                    onDoubleClick={() => startEditBookName(book)}
-                  >
-                    {book.name}
-                    <span className="edit-hint">✎</span>
-                  </h3>
-                )}
-                <p>{book.description}</p>
-                <div className="book-actions">
-                  <button type="button" className="primary-button" onClick={() => void openBook(book.id)}>
-                    Abrir livro
-                  </button>
-                  <button
-                    type="button"
-                    className="ghost-button"
-                    onClick={() => void connectNarratorRoom(book)}
-                  >
-                    Conectar sala
-                  </button>
-                </div>
-                <div className="invite-box">
-                  <p>Convite ativo:</p>
-                  <code>{getInviteLink(book)}</code>
-                  <div className="book-actions">
-                    <button type="button" className="ghost-button" onClick={() => void rotateInvite(book)}>
-                      Rotacionar link
-                    </button>
+              <div className={`book-item ${isExpanded ? 'expanded' : ''}`} key={book.id}>
+                <div
+                  className="book-item-header"
+                  onClick={() => setExpandedBookId(isExpanded ? null : book.id)}
+                >
+                  <span className="book-expand-arrow">{isExpanded ? '▼' : '▶'}</span>
+                  <div className="book-item-title">
+                    {editingBookId === book.id ? (
+                      <input
+                        className="inline-edit"
+                        autoFocus
+                        value={editingBookName}
+                        onClick={(event) => event.stopPropagation()}
+                        onChange={(event) => setEditingBookName(event.target.value)}
+                        onBlur={() => void saveBookName()}
+                        onKeyDown={(event) => {
+                         if (event.key === 'Enter') void saveBookName()
+                         if (event.key === 'Escape') setEditingBookId(null)
+                         event.stopPropagation()
+                        }}
+                      />
+                    ) : (
+                      <h4
+                        className="book-name"
+                        onDoubleClick={(event) => {
+                         event.stopPropagation()
+                         startEditBookName(book)
+                        }}
+                        title="Duplo clique para renomear"
+                      >
+                        {book.name}
+                      </h4>
+                    )}
                   </div>
-                </div>
-                <div className="acl-box">
-                  <p>Lobby pendente ({bookPending.length})</p>
-                  {bookPending.length === 0 ? (
-                    <small>Nenhuma solicitação pendente.</small>
-                  ) : (
-                    <ul>
-                      {bookPending.map((pending) => (
-                        <li key={pending.id}>
-                          <span>
-                            {pending.displayName} · {pending.country}
-                          </span>
-                          <div>
-                            <button type="button" className="ghost-button" onClick={() => approveJoin(pending)}>
-                              Aprovar
-                            </button>
-                            <button type="button" className="ghost-button" onClick={() => rejectJoin(pending)}>
-                              Rejeitar
-                            </button>
-                          </div>
-                        </li>
-                      ))}
-                    </ul>
+                  <span className="book-time">{lastUpdated}</span>
+                  {bookPending.length > 0 && (
+                    <span className="pending-badge">{bookPending.length}</span>
                   )}
                 </div>
-                <div className="acl-box">
-                  <p>ACL ({bookAcl.length})</p>
-                  {bookAcl.length === 0 ? (
-                    <small>Nenhum jogador autorizado.</small>
-                  ) : (
-                    <ul>
-                      {bookAcl.map((entry) => (
-                        <li key={entry.id}>
-                          <span>
-                            {entry.displayName} · {entry.country} · {entry.fingerprint}
-                          </span>
-                          <button type="button" className="ghost-button" onClick={() => revokePlayer(entry)}>
-                            Revogar
-                          </button>
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                </div>
-              </article>
+
+                {isExpanded && (
+                  <div className="book-actions">
+                    <button type="button" className="primary-button" onClick={() => void openBook(book.id)}>
+                      📖 Abrir
+                    </button>
+                    <button
+                      type="button"
+                      className="ghost-button"
+                      onClick={() => void connectNarratorRoom(book)}
+                    >
+                      🔌 Conectar ao Lobby
+                    </button>
+                    <button
+                      type="button"
+                      className="ghost-button"
+                      onClick={() => startEditBookName(book)}
+                    >
+                      ⚙️ Editar
+                    </button>
+
+                    <div className="book-meta" style={{ marginTop: '12px' }}>
+                      {mapCount} {mapCount === 1 ? 'mapa' : 'mapas'} · ACL ({bookAcl.length}) · Pendente ({bookPending.length})
+                    </div>
+
+                    {bookPending.length > 0 && (
+                      <div className="invite-box">
+                        <p>Solicitações pendentes:</p>
+                        <ul>
+                         {bookPending.map((pending) => (
+                           <li key={pending.id}>
+                             <span>
+                               {pending.displayName} · {pending.country}
+                             </span>
+                             <div>
+                               <button type="button" className="ghost-button" onClick={() => approveJoin(pending)}>
+                                 ✓ Aprovar
+                               </button>
+                               <button type="button" className="ghost-button" onClick={() => rejectJoin(pending)}>
+                                 ✕ Rejeitar
+                               </button>
+                             </div>
+                           </li>
+                         ))}
+                        </ul>
+                      </div>
+                    )}
+
+                    <div className="invite-box">
+                      <p>Convite ativo:</p>
+                      <code>{getInviteLink(book)}</code>
+                      <button type="button" className="ghost-button" onClick={() => void rotateInvite(book)}>
+                        Rotacionar link
+                      </button>
+                    </div>
+
+                    {bookAcl.length > 0 && (
+                      <div className="invite-box">
+                        <p>Jogadores autorizado ({bookAcl.length}):</p>
+                        <ul>
+                          {bookAcl.map((entry) => (
+                            <li key={entry.id}>
+                              <span>{entry.displayName} · {entry.country}</span>
+                              <button type="button" className="ghost-button" onClick={() => revokePlayer(entry)}>
+                                Revogar
+                              </button>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
             )
           })}
         </section>
@@ -1741,6 +1804,9 @@ function App() {
         <div className="book-badge">
           {isNarratorStudio ? currentBook?.name ?? 'Livro sem nome' : 'Modo Jogador (leitura)'}
         </div>
+        {!isNarratorStudio && (
+          <div className="player-read-only-badge">🔒 Modo Somente Leitura</div>
+        )}
         {isNarratorStudio ? (
           <>
             <div className="tabs">
@@ -1913,6 +1979,25 @@ function App() {
               height={DEFAULT_CANVAS_HEIGHT}
               ref={htmlCanvasRef}
             />
+            <div className="zoom-controls">
+              <button
+                type="button"
+                className="zoom-button"
+                onClick={() => handleZoom('out')}
+                title="Diminuir zoom"
+              >
+                −
+              </button>
+              <span className="zoom-level">{zoomLevel}%</span>
+              <button
+                type="button"
+                className="zoom-button"
+                onClick={() => handleZoom('in')}
+                title="Aumentar zoom"
+              >
+                +
+              </button>
+            </div>
           </div>
           <div className="hint-footer">
             Passe o mouse sobre uma estrutura para destacá-la · clique para abrir detalhes
