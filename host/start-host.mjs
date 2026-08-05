@@ -1,5 +1,5 @@
 import { createServer } from 'node:http'
-import { spawn, exec } from 'node:child_process'
+import { spawn } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -21,18 +21,6 @@ const signalingProcess = spawn(process.execPath, ['signaling/server.mjs'], {
   env: { ...process.env, SIGNALING_PORT: String(signalingPort) },
   stdio: 'inherit',
 })
-
-function openInBrowser(url) {
-  if (process.platform === 'win32') {
-    exec(`start "" "${url}"`)
-    return
-  }
-  if (process.platform === 'darwin') {
-    exec(`open "${url}"`)
-    return
-  }
-  exec(`xdg-open "${url}"`)
-}
 
 const mimeByExt = {
   '.html': 'text/html; charset=utf-8',
@@ -76,9 +64,9 @@ const server = createServer((req, res) => {
 
 server.listen(webPort, () => {
   const url = `http://localhost:${webPort}/`
-  console.log(`App local: ${url}`)
-  console.log(`Sinalização: ws://localhost:${signalingPort}`)
-  openInBrowser(url)
+  console.log(`🎭 Neverending Fantasy Map Studio`)
+  console.log(`📍 Abra o navegador em: ${url}`)
+  console.log(`🔌 Servidor de sinalização: ws://localhost:${signalingPort}`)
 })
 
 function shutdown() {
