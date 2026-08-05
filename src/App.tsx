@@ -336,7 +336,7 @@ function App() {
   }, [])
 
   const sendNarratorState = useCallback(
-    (json: string, mapId: string) => {
+    (mapJson: string, mapId: string) => {
       if (studioRoleRef.current !== 'narrator') {
         return
       }
@@ -354,7 +354,7 @@ function App() {
           hostSecret: currentBook.hostSecret,
           state: {
             mapId,
-            mapJson: json,
+            mapJson,
             updatedAt: Date.now(),
           },
         }),
@@ -374,7 +374,13 @@ function App() {
     }
 
     const now = Date.now()
-    const json = JSON.stringify(canvas.toJSON())
+    const canvasJson = canvas.toJSON()
+    const mapData = {
+      canvasJson,
+      width: canvas.width,
+      height: canvas.height,
+    }
+    const json = JSON.stringify(mapData)
     await db.maps.update(mapId, { json, updatedAt: now })
     if (selectedBookId) {
       await db.books.update(selectedBookId, { updatedAt: now })
@@ -429,7 +435,11 @@ function App() {
         if (remoteStateRef.current) {
           try {
             const parsed = JSON.parse(remoteStateRef.current)
-            await canvas.loadFromJSON(parsed)
+            const canvasJson = parsed.canvasJson || parsed
+            const width = parsed.width || DEFAULT_CANVAS_WIDTH
+            const height = parsed.height || DEFAULT_CANVAS_HEIGHT
+            await canvas.loadFromJSON(canvasJson)
+            canvas.setDimensions({ width, height })
           } catch {
             setPlayerConnectionState('Falha ao carregar estado recebido do narrador.')
           }
@@ -448,7 +458,11 @@ function App() {
       if (map?.json) {
         try {
           const parsed = JSON.parse(map.json)
-          await canvas.loadFromJSON(parsed)
+          const canvasJson = parsed.canvasJson || parsed
+          const width = parsed.width || DEFAULT_CANVAS_WIDTH
+          const height = parsed.height || DEFAULT_CANVAS_HEIGHT
+          await canvas.loadFromJSON(canvasJson)
+          canvas.setDimensions({ width, height })
         } catch {
           setNetworkMessage('Falha ao carregar mapa salvo localmente.')
         }
