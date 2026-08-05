@@ -23,23 +23,15 @@ import type {
   LobbyInfo,
   MapRecord,
   ModalContent,
+  NarratorRoomState,
+  PendingJoin,
   PlayerIdentityRecord,
+  PlayerJoinState,
   StructureMeta,
 } from './types'
 
 type AppScreen = 'home' | 'narrator' | 'player' | 'player-lobby-list' | 'about' | 'studio'
 type StudioRole = 'narrator' | 'player'
-
-interface PendingJoin {
-  id: string
-  clientId: string
-  bookId: string
-  displayName: string
-  fingerprint: string
-  publicKeyJwk: JsonWebKey
-  country: string
-  createdAt: number
-}
 
 interface SignalingAclEntry {
   displayName: string
@@ -159,17 +151,26 @@ function App() {
   })
   const [modalContent, setModalContent] = useState<ModalContent | null>(null)
   const [signalingUrl, setSignalingUrl] = useState(getInitialSignalingUrl)
-  const [connectedRoomBookId, setConnectedRoomBookId] = useState<string | null>(null)
-  const [pendingJoins, setPendingJoins] = useState<PendingJoin[]>([])
-  const [aclEntries, setAclEntries] = useState<LocalAclRecord[]>([])
-  const [networkMessage, setNetworkMessage] = useState<string>('')
-  const [playerIdentity, setPlayerIdentity] = useState<PlayerIdentityRecord | null>(null)
+  const [narratorRoomState, setNarratorRoomState] = useState<NarratorRoomState>({
+    bookId: null,
+    narratorName: 'Narrador',
+    bookName: 'Livro Sem Nome',
+    lobbyPassword: null,
+    pendingJoins: [],
+    aclEntries: [],
+    isConnected: false,
+    message: '',
+  })
+
+  const [playerJoinState, setPlayerJoinState] = useState<PlayerJoinState>({
+    status: 'idle',
+    message: '',
+    selectedLobbyId: null,
+    lobbyPassword: '',
+    remoteMapJson: null,
+  })
   const [playerDisplayName, setPlayerDisplayName] = useState('')
-  const [playerInviteToken, setPlayerInviteToken] = useState('')
-  const [playerConnectionState, setPlayerConnectionState] = useState(
-    'Jogador desconectado. Informe o link de convite para entrar.',
-  )
-  const [remoteMapJson, setRemoteMapJson] = useState<string | null>(null)
+  const [playerIdentity, setPlayerIdentity] = useState<PlayerIdentityRecord | null>(null)
   const [latestInstallerVersion, setLatestInstallerVersion] = useState<string | null>(null)
   const [installerReleaseUrl, setInstallerReleaseUrl] = useState<string | null>(null)
   const [showUpdateNotice, setShowUpdateNotice] = useState(true)
@@ -204,8 +205,8 @@ function App() {
   }, [studioRole])
 
   useEffect(() => {
-    remoteStateRef.current = remoteMapJson
-  }, [remoteMapJson])
+    remoteStateRef.current = playerJoinState.remoteMapJson
+  }, [playerJoinState.remoteMapJson])
 
   const sortedBooks = useMemo(
     () => [...books].sort((left, right) => right.updatedAt - left.updatedAt),
@@ -271,10 +272,10 @@ function App() {
       return
     }
     const invite = new URL(window.location.href).searchParams.get('invite')
-    if (invite && !playerInviteToken) {
-      setPlayerInviteToken(invite)
+    if (invite && !playerJoinState.lobbyPassword) {
+      setPlayerJoinState(prev => ({ ...prev, lobbyPassword: invite }))
     }
-  }, [playerInviteToken, screen])
+  }, [playerJoinState.lobbyPassword, screen])
 
   useEffect(() => {
     if (screen !== 'player-lobby-list') {
@@ -344,7 +345,7 @@ function App() {
       if (!ws || ws.readyState !== WebSocket.OPEN || !selectedBookId || !currentBook) {
         return
       }
-      if (connectedRoomBookId !== selectedBookId) {
+      if (narratorRoomState.bookId !== selectedBookId) {
         return
       }
       ws.send(
@@ -360,7 +361,7 @@ function App() {
         }),
       )
     },
-    [connectedRoomBookId, currentBook, selectedBookId],
+    [narratorRoomState.bookId, currentBook, selectedBookId],
   )
 
   const persistCurrentMap = useCallback(async () => {
@@ -441,7 +442,7 @@ function App() {
             await canvas.loadFromJSON(canvasJson)
             canvas.setDimensions({ width, height })
           } catch {
-            setPlayerConnectionState('Falha ao carregar estado recebido do narrador.')
+            setPlayerJoinState(prev => ({ ...prev, message: 'Falha ao carregar estado recebido do narrador.' }))
           }
         }
         applyModeToObjects()
@@ -464,7 +465,7 @@ function App() {
           await canvas.loadFromJSON(canvasJson)
           canvas.setDimensions({ width, height })
         } catch {
-          setNetworkMessage('Falha ao carregar mapa salvo localmente.')
+          setNarratorRoomState(prev => ({ ...prev, message: 'Falha ao carregar mapa salvo localmente.' }))
         }
       }
       applyModeToObjects()
@@ -508,7 +509,7 @@ function App() {
 
   useEffect(() => {
     if (!selectedBookId || studioRole !== 'narrator') {
-      setAclEntries([])
+      setNarratorRoomState(prev => ({ ...prev, aclEntries: [] }))
       return
     }
     void db.localAcl
@@ -516,7 +517,7 @@ function App() {
       .equals(selectedBookId)
       .toArray()
       .then((entries) =>
-        setAclEntries(entries.sort((left, right) => right.approvedAt - left.approvedAt)),
+        setNarratorRoomState(prev => ({ ...prev, aclEntries: entries.sort((left, right) => right.approvedAt - left.approvedAt) })),
       )
   }, [selectedBookId, studioRole])
 
@@ -683,7 +684,7 @@ function App() {
       return
     }
     void loadMapOnCanvas(currentMapId)
-  }, [currentMapId, loadMapOnCanvas, remoteMapJson, screen, studioRole])
+  }, [currentMapId, loadMapOnCanvas, playerJoinState.remoteMapJson, screen, studioRole])
 
   useEffect(() => {
     if (screen !== 'studio') {
@@ -702,8 +703,8 @@ function App() {
       wsRef.current.close()
       wsRef.current = null
     }
-    setConnectedRoomBookId(null)
-    setPendingJoins([])
+    setNarratorRoomState(prev => ({ ...prev, bookId: null }))
+    setNarratorRoomState(prev => ({ ...prev, pendingJoins: [] }))
   }, [])
 
   const applyAclUpdate = useCallback(
@@ -726,21 +727,21 @@ function App() {
         }
       })
       if (bookId === selectedBookId) {
-        setAclEntries(localEntries.sort((left, right) => right.approvedAt - left.approvedAt))
+        setNarratorRoomState(prev => ({ ...prev, aclEntries: localEntries.sort((left, right) => right.approvedAt - left.approvedAt) }))
       }
     },
     [selectedBookId],
   )
 
-  const connectNarratorRoom = useCallback(
+   const connectNarratorRoom = useCallback(
     async (book: BookRecord) => {
       closeSocket()
       const ws = new WebSocket(signalingUrl)
       wsRef.current = ws
-      setNetworkMessage('Conectando ao servidor de sinalização...')
+      setNarratorRoomState(prev => ({ ...prev, message: 'Conectando ao servidor de sinalização...' }))
 
       ws.onopen = () => {
-        setNetworkMessage('Conectado. Abrindo sala do livro...')
+        setNarratorRoomState(prev => ({ ...prev, message: 'Conectado. Abrindo sala do livro...' }))
         ws.send(
           JSON.stringify({
             type: 'narrator:open-room',
@@ -765,14 +766,14 @@ function App() {
         }
 
         if (payload.type === 'room:opened') {
-          setConnectedRoomBookId(book.id)
-          setNetworkMessage('Sala ativa. Convites e lobby em tempo real habilitados.')
+          setNarratorRoomState(prev => ({ ...prev, bookId: book.id }))
+          setNarratorRoomState(prev => ({ ...prev, message: 'Sala ativa. Convites e lobby em tempo real habilitados.' }))
           const initialPending = Array.isArray(payload.pending)
             ? payload.pending
             : payload.pending
               ? [payload.pending]
               : []
-          setPendingJoins(initialPending)
+          setNarratorRoomState(prev => ({ ...prev, pendingJoins: initialPending }))
           if (payload.acl) {
             void applyAclUpdate(book.id, payload.acl)
           }
@@ -780,12 +781,12 @@ function App() {
         }
 
         if (payload.type === 'room:pending-join' && payload.pending && !Array.isArray(payload.pending)) {
-          setPendingJoins((previous) => [payload.pending as PendingJoin, ...previous])
+          setNarratorRoomState((previous) => ({ ...previous, pendingJoins: [payload.pending as PendingJoin, ...previous.pendingJoins] }))
           return
         }
 
         if (payload.type === 'room:invite-rotated' && payload.inviteToken) {
-          setNetworkMessage('Link de convite rotacionado com sucesso.')
+          setNarratorRoomState(prev => ({ ...prev, message: 'Link de convite rotacionado com sucesso.' }))
           setBooks((previous) =>
             previous.map((candidate) =>
               candidate.id === book.id
@@ -806,16 +807,16 @@ function App() {
         }
 
         if (payload.type === 'server:error') {
-          setNetworkMessage(payload.message || 'Erro de rede no servidor de sinalização.')
+          setNarratorRoomState(prev => ({ ...prev, message: payload.message || 'Erro de rede no servidor de sinalização.' }))
         }
       }
 
       ws.onerror = () => {
-        setNetworkMessage('Falha ao conectar no servidor de sinalização.')
+        setNarratorRoomState(prev => ({ ...prev, message: 'Falha ao conectar no servidor de sinalização.' }))
       }
 
       ws.onclose = () => {
-        setConnectedRoomBookId(null)
+        setNarratorRoomState(prev => ({ ...prev, bookId: null }))
       }
     },
     [applyAclUpdate, closeSocket, signalingUrl],
@@ -837,7 +838,7 @@ function App() {
       if (
         wsRef.current &&
         wsRef.current.readyState === WebSocket.OPEN &&
-        connectedRoomBookId === book.id
+        narratorRoomState.bookId === book.id
       ) {
         wsRef.current.send(
           JSON.stringify({
@@ -849,7 +850,7 @@ function App() {
         )
       }
     },
-    [connectedRoomBookId],
+    [narratorRoomState.bookId],
   )
 
   const approveJoin = useCallback(
@@ -867,7 +868,7 @@ function App() {
           pendingId: pending.id,
         }),
       )
-      setPendingJoins((previous) => previous.filter((entry) => entry.id !== pending.id))
+      setNarratorRoomState((previous) => ({ ...previous, pendingJoins: previous.pendingJoins.filter((entry) => entry.id !== pending.id) }))
     },
     [books],
   )
@@ -887,7 +888,7 @@ function App() {
           pendingId: pending.id,
         }),
       )
-      setPendingJoins((previous) => previous.filter((entry) => entry.id !== pending.id))
+      setNarratorRoomState((previous) => ({ ...previous, pendingJoins: previous.pendingJoins.filter((entry) => entry.id !== pending.id) }))
     },
     [books],
   )
@@ -914,14 +915,14 @@ function App() {
   const joinViaLobbyId = useCallback(
     async (lobbyId: string) => {
       if (!playerDisplayName.trim()) {
-        setPlayerConnectionState('Informe um nome de exibição antes de conectar.')
+        setPlayerJoinState(prev => ({ ...prev, message: 'Informe um nome de exibição antes de conectar.' }))
         return
       }
 
       const identity = await getOrCreateIdentity()
       setPlayerIdentity(identity)
       closeSocket()
-      setPlayerConnectionState('Conectando ao lobby da campanha...')
+      setPlayerJoinState(prev => ({ ...prev, message: 'Conectando ao lobby da campanha...' }))
 
       const ws = new WebSocket(signalingUrl)
       wsRef.current = ws
@@ -949,7 +950,7 @@ function App() {
         }
 
         if (payload.type === 'room:waiting-host') {
-          setPlayerConnectionState(payload.message || 'Aguardando aprovação do narrador.')
+          setPlayerJoinState(prev => ({ ...prev, message: payload.message || 'Aguardando aprovação do narrador.' }))
           return
         }
 
@@ -963,7 +964,7 @@ function App() {
                 signature,
               }),
             )
-            setPlayerConnectionState('Desafio respondido. Validando assinatura...')
+            setPlayerJoinState(prev => ({ ...prev, message: 'Desafio respondido. Validando assinatura...' }))
           })
           return
         }
@@ -974,39 +975,37 @@ function App() {
           setScreen('studio')
           setSelectedBookId(payload.bookId ?? null)
           setCurrentMapId(null)
-          setRemoteMapJson(payload.state?.mapJson ?? null)
-          setPlayerConnectionState(
-            'Aprovado pelo narrador. Sessão em modo somente leitura ativa.',
-          )
+          setPlayerJoinState(prev => ({ ...prev, remoteMapJson: payload.state?.mapJson ?? null }))
+          setPlayerJoinState(prev => ({ ...prev, message: 'Aprovado pelo narrador. Sessão em modo somente leitura ativa.' }))
           return
         }
 
         if (payload.type === 'room:state') {
-          setRemoteMapJson(payload.state?.mapJson ?? null)
+          setPlayerJoinState(prev => ({ ...prev, remoteMapJson: payload.state?.mapJson ?? null }))
           return
         }
 
         if (payload.type === 'room:revoked') {
-          setPlayerConnectionState(payload.reason || 'Acesso revogado pelo narrador.')
+          setPlayerJoinState(prev => ({ ...prev, message: payload.reason || 'Acesso revogado pelo narrador.' }))
           setScreen('player-lobby-list')
           setStudioRole('player')
-          setRemoteMapJson(null)
+          setPlayerJoinState(prev => ({ ...prev, remoteMapJson: null }))
           return
         }
 
         if (payload.type === 'room:rejected') {
-          setPlayerConnectionState(payload.reason || 'Acesso rejeitado.')
+          setPlayerJoinState(prev => ({ ...prev, message: payload.reason || 'Acesso rejeitado.' }))
           setScreen('player-lobby-list')
         }
       }
 
       ws.onerror = () => {
-        setPlayerConnectionState('Falha ao conectar no servidor de sinalização.')
+        setPlayerJoinState(prev => ({ ...prev, message: 'Falha ao conectar no servidor de sinalização.' }))
       }
 
       ws.onclose = () => {
         if (studioRoleRef.current === 'player') {
-          setPlayerConnectionState('Conexão encerrada. Reconecte para voltar ao mapa do narrador.')
+          setPlayerJoinState(prev => ({ ...prev, message: 'Conexão encerrada. Reconecte para voltar ao mapa do narrador.' }))
         }
       }
     },
@@ -1015,18 +1014,18 @@ function App() {
 
   const joinAsPlayer = useCallback(async () => {
     if (!playerDisplayName.trim()) {
-      setPlayerConnectionState('Informe um nome de exibição antes de conectar.')
+      setPlayerJoinState(prev => ({ ...prev, message: 'Informe um nome de exibição antes de conectar.' }))
       return
     }
-    if (!playerInviteToken.trim()) {
-      setPlayerConnectionState('Informe o token de convite do narrador.')
+    if (!playerJoinState.lobbyPassword.trim()) {
+      setPlayerJoinState(prev => ({ ...prev, message: 'Informe o token de convite do narrador.' }))
       return
     }
 
     const identity = await getOrCreateIdentity()
     setPlayerIdentity(identity)
     closeSocket()
-    setPlayerConnectionState('Conectando ao lobby da campanha...')
+    setPlayerJoinState(prev => ({ ...prev, message: 'Conectando ao lobby da campanha...' }))
 
     const ws = new WebSocket(signalingUrl)
     wsRef.current = ws
@@ -1034,7 +1033,7 @@ function App() {
       ws.send(
         JSON.stringify({
           type: 'player:join-request',
-          inviteToken: playerInviteToken.trim(),
+          inviteToken: playerJoinState.lobbyPassword.trim(),
           displayName: playerDisplayName.trim(),
           fingerprint: identity.fingerprint,
           publicKeyJwk: identity.publicKeyJwk,
@@ -1054,7 +1053,7 @@ function App() {
       }
 
       if (payload.type === 'room:waiting-host') {
-        setPlayerConnectionState(payload.message || 'Aguardando aprovação do narrador.')
+        setPlayerJoinState(prev => ({ ...prev, message: payload.message || 'Aguardando aprovação do narrador.' }))
         return
       }
 
@@ -1068,7 +1067,7 @@ function App() {
               signature,
             }),
           )
-          setPlayerConnectionState('Desafio respondido. Validando assinatura...')
+          setPlayerJoinState(prev => ({ ...prev, message: 'Desafio respondido. Validando assinatura...' }))
         })
         return
       }
@@ -1079,42 +1078,40 @@ function App() {
         setScreen('studio')
         setSelectedBookId(payload.bookId ?? null)
         setCurrentMapId(null)
-        setRemoteMapJson(payload.state?.mapJson ?? null)
-        setPlayerConnectionState(
-          'Aprovado pelo narrador. Sessão em modo somente leitura ativa.',
-        )
+        setPlayerJoinState(prev => ({ ...prev, remoteMapJson: payload.state?.mapJson ?? null }))
+        setPlayerJoinState(prev => ({ ...prev, message: 'Aprovado pelo narrador. Sessão em modo somente leitura ativa.' }))
         return
       }
 
       if (payload.type === 'room:state') {
-        setRemoteMapJson(payload.state?.mapJson ?? null)
+        setPlayerJoinState(prev => ({ ...prev, remoteMapJson: payload.state?.mapJson ?? null }))
         return
       }
 
       if (payload.type === 'room:revoked') {
-        setPlayerConnectionState(payload.reason || 'Acesso revogado pelo narrador.')
+        setPlayerJoinState(prev => ({ ...prev, message: payload.reason || 'Acesso revogado pelo narrador.' }))
         setScreen('player')
         setStudioRole('player')
-        setRemoteMapJson(null)
+        setPlayerJoinState(prev => ({ ...prev, remoteMapJson: null }))
         return
       }
 
       if (payload.type === 'room:rejected') {
-        setPlayerConnectionState(payload.reason || 'Acesso rejeitado.')
+        setPlayerJoinState(prev => ({ ...prev, message: payload.reason || 'Acesso rejeitado.' }))
         setScreen('player')
       }
     }
 
     ws.onerror = () => {
-      setPlayerConnectionState('Falha ao conectar no servidor de sinalização.')
+      setPlayerJoinState(prev => ({ ...prev, message: 'Falha ao conectar no servidor de sinalização.' }))
     }
 
     ws.onclose = () => {
       if (studioRoleRef.current === 'player') {
-        setPlayerConnectionState('Conexão encerrada. Reconecte para voltar ao mapa do narrador.')
+        setPlayerJoinState(prev => ({ ...prev, message: 'Conexão encerrada. Reconecte para voltar ao mapa do narrador.' }))
       }
     }
-  }, [closeSocket, playerDisplayName, playerInviteToken, signalingUrl])
+  }, [closeSocket, playerDisplayName, playerJoinState.lobbyPassword, signalingUrl])
 
   const handleAssetUpload = useCallback(async (event: ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(event.target.files ?? [])
@@ -1483,7 +1480,7 @@ function App() {
             placeholder="ws://localhost:8787"
           />
         </label>
-        <p>{networkMessage || 'Conecte um livro para habilitar lobby e sincronização.'}</p>
+        <p>{narratorRoomState.message || 'Conecte um livro para habilitar lobby e sincronização.'}</p>
         <small>
           P2P completo: configure STUN/TURN no host. Priorize Cloudflare quando disponível; para
           POC, use fallback gratuito com limites de tráfego.
@@ -1505,8 +1502,8 @@ function App() {
         <section className="book-grid">
           {sortedBooks.map((book) => {
             const mapCount = maps.filter((map) => map.bookId === book.id).length
-            const bookAcl = aclEntries.filter((entry) => entry.bookId === book.id)
-            const bookPending = pendingJoins.filter((entry) => entry.bookId === book.id)
+            const bookAcl = narratorRoomState.aclEntries.filter((entry) => entry.bookId === book.id)
+            const bookPending = narratorRoomState.pendingJoins.filter((entry) => entry.bookId === book.id)
             return (
               <article className="book-card access-card" key={book.id}>
                 <p className="book-meta">
@@ -1652,15 +1649,15 @@ function App() {
         <label>
           Token de convite
           <input
-            value={playerInviteToken}
-            onChange={(event) => setPlayerInviteToken(event.target.value)}
+           value={playerJoinState.lobbyPassword}
+           onChange={(event) => setPlayerJoinState(prev => ({ ...prev, lobbyPassword: event.target.value }))}
             placeholder="invite_xxx..."
           />
         </label>
         <button type="button" className="primary-button" onClick={() => void joinAsPlayer()}>
           Entrar na campanha
         </button>
-        <p>{playerConnectionState}</p>
+        <p>{playerJoinState.message}</p>
         {playerIdentity ? (
           <small>Identidade local: {playerIdentity.fingerprint}</small>
         ) : null}
@@ -1744,8 +1741,8 @@ function App() {
         <label>
           <strong>Ou cole um token de convite:</strong>
           <input
-            value={playerInviteToken}
-            onChange={(event) => setPlayerInviteToken(event.target.value)}
+            value={playerJoinState.lobbyPassword}
+            onChange={(event) => setPlayerJoinState(prev => ({ ...prev, lobbyPassword: event.target.value }))}
             placeholder="invite_xxx..."
           />
         </label>
