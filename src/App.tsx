@@ -178,6 +178,11 @@ function App() {
   const [editingBookName, setEditingBookName] = useState('')
   const [editingMapId, setEditingMapId] = useState<string | null>(null)
   const [editingMapName, setEditingMapName] = useState('')
+  const [editingBookPassword, setEditingBookPassword] = useState<string | null>(null)
+  const [showPasswordDialog, setShowPasswordDialog] = useState(false)
+  const [showPasswordPrompt, setShowPasswordPrompt] = useState(false)
+  const [pendingLobbyPasswordEntry, setPendingLobbyPasswordEntry] = useState<{ lobbyId: string; hasPassword: boolean } | null>(null)
+  const [playerPasswordInput, setPlayerPasswordInput] = useState('')
   const [editingAssetId, setEditingAssetId] = useState<string | null>(null)
   const [editingAssetName, setEditingAssetName] = useState('')
   const [notesPreview, setNotesPreview] = useState(false)
@@ -806,6 +811,7 @@ function App() {
             inviteToken: book.inviteToken,
             narratorName: book.name || 'Narrador',
             bookName: book.name,
+            lobbyPassword: book.lobbyPassword || null,
           }),
         )
       }
@@ -969,7 +975,7 @@ function App() {
   )
 
   const joinAsPlayer = useCallback(
-    async (path: 'lobby-id' | 'token', data: { lobbyId?: string; token?: string } = {}) => {
+    async (path: 'lobby-id' | 'token', data: { lobbyId?: string; token?: string; lobbyPassword?: string | null } = {}) => {
       if (!playerDisplayName.trim()) {
         setPlayerJoinState(prev => ({ ...prev, message: 'Informe um nome de exibição antes de conectar.' }))
         return
@@ -996,6 +1002,7 @@ function App() {
               displayName: playerDisplayName.trim(),
               fingerprint: identity.fingerprint,
               publicKeyJwk: identity.publicKeyJwk,
+              lobbyPassword: data.lobbyPassword || null,
             }),
           )
         } else {
@@ -1338,6 +1345,15 @@ function App() {
     setEditingBookId(null)
   }, [editingBookId, editingBookName])
 
+  const saveBookPassword = useCallback(async (bookId: string, password: string | null) => {
+    const now = Date.now()
+    const trimmed = password?.trim() || null
+    await db.books.update(bookId, { lobbyPassword: trimmed, updatedAt: now })
+    setBooks((prev) => prev.map((b) => (b.id === bookId ? { ...b, lobbyPassword: trimmed, updatedAt: now } : b)))
+    setShowPasswordDialog(false)
+    setEditingBookPassword(null)
+  }, [])
+
   const startEditBookName = useCallback((book: BookRecord) => {
     setEditingBookId(book.id)
     setEditingBookName(book.name)
@@ -1539,6 +1555,16 @@ function App() {
                     >
                       ⚙️ Editar
                     </button>
+                    <button
+                      type="button"
+                      className="ghost-button"
+                      onClick={() => {
+                        setEditingBookPassword(book.lobbyPassword)
+                        setShowPasswordDialog(true)
+                      }}
+                    >
+                      🔐 Senha
+                    </button>
 
                     <div className="book-meta" style={{ marginTop: '12px' }}>
                       {mapCount} {mapCount === 1 ? 'mapa' : 'mapas'} · ACL ({bookAcl.length}) · Pendente ({bookPending.length})
@@ -1597,8 +1623,61 @@ function App() {
           })}
         </section>
       )}
+      {renderNarratorPasswordDialog()}
     </main>
   )
+
+  const renderNarratorPasswordDialog = () => {
+    if (!showPasswordDialog) return null
+    return (
+      <div className="modal-overlay visible" onClick={() => setShowPasswordDialog(false)}>
+        <div className="modal-scroll" onClick={(e) => e.stopPropagation()}>
+          <button
+            type="button"
+            className="modal-close"
+            onClick={() => setShowPasswordDialog(false)}
+          >
+            ✕
+          </button>
+          <h2 className="modal-title">Proteção com Senha</h2>
+          <div className="field">
+            <label>Senha do Lobby (opcional)</label>
+            <input
+              type="password"
+              placeholder="Deixe em branco para sem senha"
+              value={editingBookPassword || ''}
+              onChange={(e) => setEditingBookPassword(e.target.value || null)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  const selectedBook = books.find(b => b.id === editingBookId)
+                  if (selectedBook) void saveBookPassword(selectedBook.id, editingBookPassword)
+                }
+              }}
+            />
+          </div>
+          <div className="inspector-actions">
+            <button
+              type="button"
+              className="btn btn-save"
+              onClick={() => {
+                const selectedBook = books.find(b => b.id === editingBookId)
+                if (selectedBook) void saveBookPassword(selectedBook.id, editingBookPassword)
+              }}
+            >
+              Salvar
+            </button>
+            <button
+              type="button"
+              className="btn btn-delete"
+              onClick={() => setShowPasswordDialog(false)}
+            >
+              Cancelar
+            </button>
+          </div>
+        </div>
+      </div>
+    )
+  }
 
   const renderPlayer = () => (
     <main className="shell screen-shell">
@@ -1723,7 +1802,15 @@ function App() {
                 type="button"
                 className={lobby.joinable ? 'primary-button' : 'disabled-button'}
                 disabled={!lobby.joinable}
-                onClick={() => void joinAsPlayer('lobby-id', { lobbyId: lobby.id })}
+                onClick={() => {
+                  if (lobby.hasPassword) {
+                    setPendingLobbyPasswordEntry({ lobbyId: lobby.id, hasPassword: true })
+                    setPlayerPasswordInput('')
+                    setShowPasswordPrompt(true)
+                  } else {
+                    void joinAsPlayer('lobby-id', { lobbyId: lobby.id, lobbyPassword: null })
+                  }
+                }}
               >
                 {lobby.joinable ? 'Solicitar Entrada' : 'Sala Cheia'}
               </button>
@@ -1746,8 +1833,69 @@ function App() {
           Conectar com Token
         </button>
       </section>
+      {renderPlayerPasswordPrompt()}
     </main>
   )
+
+  const renderPlayerPasswordPrompt = () => {
+    if (!showPasswordPrompt || !pendingLobbyPasswordEntry) return null
+    return (
+      <div className="modal-overlay visible" onClick={() => setShowPasswordPrompt(false)}>
+        <div className="modal-scroll" onClick={(e) => e.stopPropagation()}>
+          <button
+            type="button"
+            className="modal-close"
+            onClick={() => setShowPasswordPrompt(false)}
+          >
+            ✕
+          </button>
+          <h2 className="modal-title">🔐 Sala Protegida por Senha</h2>
+          <div className="field">
+            <label>Digite a senha para entrar nesta sala:</label>
+            <input
+              type="password"
+              placeholder="Senha da sala..."
+              value={playerPasswordInput}
+              onChange={(e) => setPlayerPasswordInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && pendingLobbyPasswordEntry) {
+                  void joinAsPlayer('lobby-id', {
+                    lobbyId: pendingLobbyPasswordEntry.lobbyId,
+                    lobbyPassword: playerPasswordInput || null,
+                  })
+                  setShowPasswordPrompt(false)
+                }
+              }}
+            />
+          </div>
+          <div className="inspector-actions">
+            <button
+              type="button"
+              className="btn btn-save"
+              onClick={() => {
+                if (pendingLobbyPasswordEntry) {
+                  void joinAsPlayer('lobby-id', {
+                    lobbyId: pendingLobbyPasswordEntry.lobbyId,
+                    lobbyPassword: playerPasswordInput || null,
+                  })
+                  setShowPasswordPrompt(false)
+                }
+              }}
+            >
+              Entrar
+            </button>
+            <button
+              type="button"
+              className="btn btn-delete"
+              onClick={() => setShowPasswordPrompt(false)}
+            >
+              Cancelar
+            </button>
+          </div>
+        </div>
+      </div>
+    )
+  }
 
   const renderPlayerStudio = () => {
     const playerBooks = books.filter(b => b.id === selectedBookId)
