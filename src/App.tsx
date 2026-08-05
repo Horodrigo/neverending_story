@@ -298,6 +298,23 @@ function App() {
     return () => clearInterval(interval)
   }, [fetchLobbies, screen])
 
+  // Auto-expand book when new pending join arrives
+  useEffect(() => {
+    if (screen !== 'narrator' || narratorRoomState.pendingJoins.length === 0) {
+      return
+    }
+    // Find which book has the most recent pending joins
+    const bookWithPending = narratorRoomState.pendingJoins[0]?.bookId
+    if (bookWithPending && expandedBookId !== bookWithPending) {
+      setExpandedBookId(bookWithPending)
+      // Show toast notification
+      setNarratorRoomState(prev => ({
+        ...prev,
+        message: `Novo jogador aguardando aprovação: ${narratorRoomState.pendingJoins[0]?.displayName || 'Desconhecido'}`,
+      }))
+    }
+  }, [narratorRoomState.pendingJoins, expandedBookId, screen])
+
   useEffect(() => {
     let cancelled = false
     const releaseRepo = __INSTALLER_RELEASE_REPO__
