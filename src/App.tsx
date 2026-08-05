@@ -190,6 +190,8 @@ function App() {
   const [lobbiesLoading, setLobbiesLoading] = useState(false)
   const [expandedBookId, setExpandedBookId] = useState<string | null>(null)
   const [zoomLevel, setZoomLevel] = useState(100)
+  const [isPanning, setIsPanning] = useState(false)
+  const panStartRef = useRef({ x: 0, y: 0, scrollLeft: 0, scrollTop: 0 })
 
   useEffect(() => {
     currentMapIdRef.current = currentMapId
@@ -480,6 +482,58 @@ function App() {
     })
   }, [applyZoom])
 
+  const handleCanvasWheel = useCallback((e: WheelEvent) => {
+    if (editMode) {
+      e.preventDefault()
+      setZoomLevel((current) => {
+        const zoomLevels = [50, 75, 100, 125, 150, 200]
+        const currentIndex = zoomLevels.indexOf(current)
+        let newLevel = current
+
+        if (e.deltaY < 0) {
+          // Scroll up = zoom in
+          const nextIndex = currentIndex + 1
+          newLevel = nextIndex < zoomLevels.length ? zoomLevels[nextIndex] : zoomLevels[zoomLevels.length - 1]
+        } else {
+          // Scroll down = zoom out
+          const prevIndex = currentIndex - 1
+          newLevel = prevIndex >= 0 ? zoomLevels[prevIndex] : zoomLevels[0]
+        }
+
+        applyZoom(newLevel)
+        return newLevel
+      })
+    }
+  }, [editMode, applyZoom])
+
+  const handleCanvasPanStart = useCallback((e: MouseEvent) => {
+    if (!editMode || zoomLevel <= 100 || e.button !== 2) return // Right-click only
+    setIsPanning(true)
+    const frame = htmlCanvasRef.current?.parentElement as HTMLElement | undefined
+    panStartRef.current = {
+      x: e.clientX,
+      y: e.clientY,
+      scrollLeft: frame?.scrollLeft ?? 0,
+      scrollTop: frame?.scrollTop ?? 0,
+    }
+  }, [editMode, zoomLevel])
+
+  const handleCanvasPanMove = useCallback((e: MouseEvent) => {
+    if (!isPanning) return
+    const frame = htmlCanvasRef.current?.parentElement as HTMLElement | undefined
+    if (!frame) return
+
+    const deltaX = e.clientX - panStartRef.current.x
+    const deltaY = e.clientY - panStartRef.current.y
+
+    frame.scrollLeft = panStartRef.current.scrollLeft - deltaX
+    frame.scrollTop = panStartRef.current.scrollTop - deltaY
+  }, [isPanning])
+
+  const handleCanvasPanEnd = useCallback(() => {
+    setIsPanning(false)
+  }, [])
+
   const loadMapOnCanvas = useCallback(
     async (mapId: string | null) => {
       const canvas = canvasRef.current
@@ -739,6 +793,32 @@ function App() {
       canvasRef.current = null
     }
   }, [screen])
+
+  useEffect(() => {
+    const canvas = htmlCanvasRef.current
+    if (!canvas || screen !== 'studio') return
+
+    // Wheel zoom
+    canvas.addEventListener('wheel', handleCanvasWheel)
+    // Pan handlers
+    canvas.addEventListener('mousedown', handleCanvasPanStart)
+    document.addEventListener('mousemove', handleCanvasPanMove)
+    document.addEventListener('mouseup', handleCanvasPanEnd)
+    // Prevent context menu during pan
+    canvas.addEventListener('contextmenu', (e) => {
+      if (isPanning) e.preventDefault()
+    })
+
+    return () => {
+      canvas.removeEventListener('wheel', handleCanvasWheel)
+      canvas.removeEventListener('mousedown', handleCanvasPanStart)
+      canvas.removeEventListener('contextmenu', (e) => {
+        if (isPanning) e.preventDefault()
+      })
+      document.removeEventListener('mousemove', handleCanvasPanMove)
+      document.removeEventListener('mouseup', handleCanvasPanEnd)
+    }
+  }, [screen, editMode, zoomLevel, isPanning, handleCanvasWheel, handleCanvasPanStart, handleCanvasPanMove, handleCanvasPanEnd])
 
   useEffect(() => {
     if (screen !== 'studio') {
@@ -2200,25 +2280,28 @@ function App() {
               height={DEFAULT_CANVAS_HEIGHT}
               ref={htmlCanvasRef}
             />
-            <div className="zoom-controls">
-              <button
-                type="button"
-                className="zoom-button"
-                onClick={() => handleZoom('out')}
-                title="Diminuir zoom"
-              >
-                −
-              </button>
-              <span className="zoom-level">{zoomLevel}%</span>
-              <button
-                type="button"
-                className="zoom-button"
-                onClick={() => handleZoom('in')}
-                title="Aumentar zoom"
-              >
-                +
-              </button>
-            </div>
+          </div>
+          <div className="zoom-controls">
+            <button
+              type="button"
+              className="zoom-button"
+              onClick={() => handleZoom('in')}
+              title="Aumentar zoom (ou roda do mouse)"
+            >
+              ➕
+            </button>
+            <span className="zoom-level">{zoomLevel}%</span>
+            <button
+              type="button"
+              className="zoom-button"
+              onClick={() => handleZoom('out')}
+              title="Diminuir zoom (ou roda do mouse)"
+            >
+              ➖
+            </button>
+            {zoomLevel > 100 && (
+              <p className="zoom-hint">Click direito + arrastar para mover o mapa</p>
+            )}
           </div>
           <div className="hint-footer">
             Passe o mouse sobre uma estrutura para destacá-la · clique para abrir detalhes
