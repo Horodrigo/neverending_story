@@ -49,6 +49,8 @@ class MapStudioDB extends Dexie {
           hostSecret: `host_${Math.random().toString(36).slice(2, 9)}`,
           inviteToken: `invite_${Math.random().toString(36).slice(2, 12)}`,
           inviteUpdatedAt: now,
+          lobbyPassword: null,
+          isLobbyOpen: true,
           createdAt: now,
           updatedAt: now,
         })
@@ -79,6 +81,24 @@ class MapStudioDB extends Dexie {
             inviteToken:
               book.inviteToken || `invite_${Math.random().toString(36).slice(2, 12)}`,
             inviteUpdatedAt: book.inviteUpdatedAt || now,
+          })
+        }
+      })
+    this.version(4)
+      .stores({
+        assets: 'id, name, createdAt',
+        books: 'id, updatedAt',
+        maps: 'id, bookId, position, updatedAt',
+        identities: 'id, fingerprint, updatedAt',
+        localAcl: 'id, bookId, fingerprint, revokedAt',
+      })
+      .upgrade(async (tx) => {
+        const booksTable = tx.table('books') as Table<BookRecord, string>
+        const books = await booksTable.toArray()
+        for (const book of books) {
+          await booksTable.update(book.id, {
+            lobbyPassword: null,
+            isLobbyOpen: true,
           })
         }
       })

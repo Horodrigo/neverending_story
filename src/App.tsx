@@ -747,6 +747,8 @@ function App() {
             bookId: book.id,
             hostSecret: book.hostSecret,
             inviteToken: book.inviteToken,
+            narratorName: book.name || 'Narrador',
+            bookName: book.name,
           }),
         )
       }
@@ -1218,6 +1220,8 @@ function App() {
       hostSecret: secrets.hostSecret,
       inviteToken: secrets.inviteToken,
       inviteUpdatedAt: secrets.inviteUpdatedAt,
+      lobbyPassword: null,
+      isLobbyOpen: true,
       createdAt: now,
       updatedAt: now,
     }
