@@ -912,10 +912,15 @@ function App() {
     [books],
   )
 
-  const joinViaLobbyId = useCallback(
-    async (lobbyId: string) => {
+  const joinAsPlayer = useCallback(
+    async (path: 'lobby-id' | 'token', data: { lobbyId?: string; token?: string } = {}) => {
       if (!playerDisplayName.trim()) {
         setPlayerJoinState(prev => ({ ...prev, message: 'Informe um nome de exibição antes de conectar.' }))
+        return
+      }
+
+      if (path === 'token' && !playerJoinState.lobbyPassword.trim()) {
+        setPlayerJoinState(prev => ({ ...prev, message: 'Informe o token de convite do narrador.' }))
         return
       }
 
@@ -927,15 +932,27 @@ function App() {
       const ws = new WebSocket(signalingUrl)
       wsRef.current = ws
       ws.onopen = () => {
-        ws.send(
-          JSON.stringify({
-            type: 'player:join-via-lobby-id',
-            bookId: lobbyId,
-            displayName: playerDisplayName.trim(),
-            fingerprint: identity.fingerprint,
-            publicKeyJwk: identity.publicKeyJwk,
-          }),
-        )
+        if (path === 'lobby-id') {
+          ws.send(
+            JSON.stringify({
+              type: 'player:join-via-lobby-id',
+              bookId: data.lobbyId,
+              displayName: playerDisplayName.trim(),
+              fingerprint: identity.fingerprint,
+              publicKeyJwk: identity.publicKeyJwk,
+            }),
+          )
+        } else {
+          ws.send(
+            JSON.stringify({
+              type: 'player:join-request',
+              inviteToken: playerJoinState.lobbyPassword.trim(),
+              displayName: playerDisplayName.trim(),
+              fingerprint: identity.fingerprint,
+              publicKeyJwk: identity.publicKeyJwk,
+            }),
+          )
+        }
       }
 
       ws.onmessage = (event) => {
@@ -1009,109 +1026,8 @@ function App() {
         }
       }
     },
-    [closeSocket, playerDisplayName, signalingUrl],
+    [closeSocket, playerDisplayName, playerJoinState.lobbyPassword, signalingUrl],
   )
-
-  const joinAsPlayer = useCallback(async () => {
-    if (!playerDisplayName.trim()) {
-      setPlayerJoinState(prev => ({ ...prev, message: 'Informe um nome de exibição antes de conectar.' }))
-      return
-    }
-    if (!playerJoinState.lobbyPassword.trim()) {
-      setPlayerJoinState(prev => ({ ...prev, message: 'Informe o token de convite do narrador.' }))
-      return
-    }
-
-    const identity = await getOrCreateIdentity()
-    setPlayerIdentity(identity)
-    closeSocket()
-    setPlayerJoinState(prev => ({ ...prev, message: 'Conectando ao lobby da campanha...' }))
-
-    const ws = new WebSocket(signalingUrl)
-    wsRef.current = ws
-    ws.onopen = () => {
-      ws.send(
-        JSON.stringify({
-          type: 'player:join-request',
-          inviteToken: playerJoinState.lobbyPassword.trim(),
-          displayName: playerDisplayName.trim(),
-          fingerprint: identity.fingerprint,
-          publicKeyJwk: identity.publicKeyJwk,
-        }),
-      )
-    }
-
-    ws.onmessage = (event) => {
-      const payload = JSON.parse(event.data) as {
-        type: string
-        reason?: string
-        challenge?: string
-        pendingId?: string
-        bookId?: string
-        state?: { mapJson?: string }
-        message?: string
-      }
-
-      if (payload.type === 'room:waiting-host') {
-        setPlayerJoinState(prev => ({ ...prev, message: payload.message || 'Aguardando aprovação do narrador.' }))
-        return
-      }
-
-      if (payload.type === 'room:challenge' && payload.challenge && payload.pendingId && payload.bookId) {
-        void signChallenge(identity.privateKeyJwk, payload.challenge).then((signature) => {
-          ws.send(
-            JSON.stringify({
-              type: 'player:challenge-response',
-              bookId: payload.bookId,
-              pendingId: payload.pendingId,
-              signature,
-            }),
-          )
-          setPlayerJoinState(prev => ({ ...prev, message: 'Desafio respondido. Validando assinatura...' }))
-        })
-        return
-      }
-
-      if (payload.type === 'room:approved') {
-        setStudioRole('player')
-        setEditMode(false)
-        setScreen('studio')
-        setSelectedBookId(payload.bookId ?? null)
-        setCurrentMapId(null)
-        setPlayerJoinState(prev => ({ ...prev, remoteMapJson: payload.state?.mapJson ?? null }))
-        setPlayerJoinState(prev => ({ ...prev, message: 'Aprovado pelo narrador. Sessão em modo somente leitura ativa.' }))
-        return
-      }
-
-      if (payload.type === 'room:state') {
-        setPlayerJoinState(prev => ({ ...prev, remoteMapJson: payload.state?.mapJson ?? null }))
-        return
-      }
-
-      if (payload.type === 'room:revoked') {
-        setPlayerJoinState(prev => ({ ...prev, message: payload.reason || 'Acesso revogado pelo narrador.' }))
-        setScreen('player')
-        setStudioRole('player')
-        setPlayerJoinState(prev => ({ ...prev, remoteMapJson: null }))
-        return
-      }
-
-      if (payload.type === 'room:rejected') {
-        setPlayerJoinState(prev => ({ ...prev, message: payload.reason || 'Acesso rejeitado.' }))
-        setScreen('player')
-      }
-    }
-
-    ws.onerror = () => {
-      setPlayerJoinState(prev => ({ ...prev, message: 'Falha ao conectar no servidor de sinalização.' }))
-    }
-
-    ws.onclose = () => {
-      if (studioRoleRef.current === 'player') {
-        setPlayerJoinState(prev => ({ ...prev, message: 'Conexão encerrada. Reconecte para voltar ao mapa do narrador.' }))
-      }
-    }
-  }, [closeSocket, playerDisplayName, playerJoinState.lobbyPassword, signalingUrl])
 
   const handleAssetUpload = useCallback(async (event: ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(event.target.files ?? [])
@@ -1654,7 +1570,7 @@ function App() {
             placeholder="invite_xxx..."
           />
         </label>
-        <button type="button" className="primary-button" onClick={() => void joinAsPlayer()}>
+        <button type="button" className="primary-button" onClick={() => void joinAsPlayer('token', { token: playerJoinState.lobbyPassword })}>
           Entrar na campanha
         </button>
         <p>{playerJoinState.message}</p>
@@ -1727,7 +1643,7 @@ function App() {
                 type="button"
                 className={lobby.joinable ? 'primary-button' : 'disabled-button'}
                 disabled={!lobby.joinable}
-                onClick={() => void joinViaLobbyId(lobby.id)}
+                onClick={() => void joinAsPlayer('lobby-id', { lobbyId: lobby.id })}
               >
                 {lobby.joinable ? 'Solicitar Entrada' : 'Sala Cheia'}
               </button>
@@ -1746,7 +1662,7 @@ function App() {
             placeholder="invite_xxx..."
           />
         </label>
-        <button type="button" className="ghost-button" onClick={() => void joinAsPlayer()}>
+        <button type="button" className="ghost-button" onClick={() => void joinAsPlayer('token', { token: playerJoinState.lobbyPassword })}>
           Conectar com Token
         </button>
       </section>
