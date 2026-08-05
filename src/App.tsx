@@ -20,13 +20,14 @@ import type {
   AssetRecord,
   BookRecord,
   LocalAclRecord,
+  LobbyInfo,
   MapRecord,
   ModalContent,
   PlayerIdentityRecord,
   StructureMeta,
 } from './types'
 
-type AppScreen = 'home' | 'narrator' | 'player' | 'about' | 'studio'
+type AppScreen = 'home' | 'narrator' | 'player' | 'player-lobby-list' | 'about' | 'studio'
 type StudioRole = 'narrator' | 'player'
 
 interface PendingJoin {
@@ -179,6 +180,8 @@ function App() {
   const [editingAssetId, setEditingAssetId] = useState<string | null>(null)
   const [editingAssetName, setEditingAssetName] = useState('')
   const [notesPreview, setNotesPreview] = useState(false)
+  const [lobbies, setLobbies] = useState<LobbyInfo[]>([])
+  const [lobbiesLoading, setLobbiesLoading] = useState(false)
 
   useEffect(() => {
     currentMapIdRef.current = currentMapId
@@ -246,6 +249,19 @@ function App() {
     return latestInstallerVersion !== __APP_VERSION__
   }, [latestInstallerVersion, showUpdateNotice])
 
+  const fetchLobbies = useCallback(async () => {
+    try {
+      const httpUrl = signalingUrl.replace(/^ws/, 'http')
+      const response = await fetch(`${httpUrl}/api/lobbies`)
+      if (response.ok) {
+        const data = (await response.json()) as LobbyInfo[]
+        setLobbies(data)
+      }
+    } catch {
+      console.error('Failed to fetch lobbies')
+    }
+  }, [signalingUrl])
+
   useEffect(() => {
     localStorage.setItem('mapstudio_signaling_url', signalingUrl)
   }, [signalingUrl])
@@ -259,6 +275,21 @@ function App() {
       setPlayerInviteToken(invite)
     }
   }, [playerInviteToken, screen])
+
+  useEffect(() => {
+    if (screen !== 'player-lobby-list') {
+      return
+    }
+    setLobbiesLoading(true)
+    void fetchLobbies().then(() => setLobbiesLoading(false))
+    const interval = setInterval(
+      () => {
+        void fetchLobbies()
+      },
+      3000,
+    )
+    return () => clearInterval(interval)
+  }, [fetchLobbies, screen])
 
   useEffect(() => {
     let cancelled = false
@@ -862,6 +893,108 @@ function App() {
       )
     },
     [books],
+  )
+
+  const joinViaLobbyId = useCallback(
+    async (lobbyId: string) => {
+      if (!playerDisplayName.trim()) {
+        setPlayerConnectionState('Informe um nome de exibição antes de conectar.')
+        return
+      }
+
+      const identity = await getOrCreateIdentity()
+      setPlayerIdentity(identity)
+      closeSocket()
+      setPlayerConnectionState('Conectando ao lobby da campanha...')
+
+      const ws = new WebSocket(signalingUrl)
+      wsRef.current = ws
+      ws.onopen = () => {
+        ws.send(
+          JSON.stringify({
+            type: 'player:join-via-lobby-id',
+            bookId: lobbyId,
+            displayName: playerDisplayName.trim(),
+            fingerprint: identity.fingerprint,
+            publicKeyJwk: identity.publicKeyJwk,
+          }),
+        )
+      }
+
+      ws.onmessage = (event) => {
+        const payload = JSON.parse(event.data) as {
+          type: string
+          reason?: string
+          challenge?: string
+          pendingId?: string
+          bookId?: string
+          state?: { mapJson?: string }
+          message?: string
+        }
+
+        if (payload.type === 'room:waiting-host') {
+          setPlayerConnectionState(payload.message || 'Aguardando aprovação do narrador.')
+          return
+        }
+
+        if (payload.type === 'room:challenge' && payload.challenge && payload.pendingId && payload.bookId) {
+          void signChallenge(identity.privateKeyJwk, payload.challenge).then((signature) => {
+            ws.send(
+              JSON.stringify({
+                type: 'player:challenge-response',
+                bookId: payload.bookId,
+                pendingId: payload.pendingId,
+                signature,
+              }),
+            )
+            setPlayerConnectionState('Desafio respondido. Validando assinatura...')
+          })
+          return
+        }
+
+        if (payload.type === 'room:approved') {
+          setStudioRole('player')
+          setEditMode(false)
+          setScreen('studio')
+          setSelectedBookId(payload.bookId ?? null)
+          setCurrentMapId(null)
+          setRemoteMapJson(payload.state?.mapJson ?? null)
+          setPlayerConnectionState(
+            'Aprovado pelo narrador. Sessão em modo somente leitura ativa.',
+          )
+          return
+        }
+
+        if (payload.type === 'room:state') {
+          setRemoteMapJson(payload.state?.mapJson ?? null)
+          return
+        }
+
+        if (payload.type === 'room:revoked') {
+          setPlayerConnectionState(payload.reason || 'Acesso revogado pelo narrador.')
+          setScreen('player-lobby-list')
+          setStudioRole('player')
+          setRemoteMapJson(null)
+          return
+        }
+
+        if (payload.type === 'room:rejected') {
+          setPlayerConnectionState(payload.reason || 'Acesso rejeitado.')
+          setScreen('player-lobby-list')
+        }
+      }
+
+      ws.onerror = () => {
+        setPlayerConnectionState('Falha ao conectar no servidor de sinalização.')
+      }
+
+      ws.onclose = () => {
+        if (studioRoleRef.current === 'player') {
+          setPlayerConnectionState('Conexão encerrada. Reconecte para voltar ao mapa do narrador.')
+        }
+      }
+    },
+    [closeSocket, playerDisplayName, signalingUrl],
   )
 
   const joinAsPlayer = useCallback(async () => {
@@ -1489,6 +1622,15 @@ function App() {
             placeholder="Ex: Eldrin"
           />
         </label>
+        <div className="player-tabs">
+          <button
+            type="button"
+            className="tab-button active"
+            onClick={() => setScreen('player-lobby-list')}
+          >
+            🔍 Descobrir Salas
+          </button>
+        </div>
         <label>
           Token de convite
           <input
@@ -1517,6 +1659,81 @@ function App() {
             </p>
           </article>
         ))}
+      </section>
+    </main>
+  )
+
+  const renderPlayerLobbyList = () => (
+    <main className="shell screen-shell">
+      <header className="screen-header">
+        <div>
+          <p className="eyebrow">Salas Ativas</p>
+          <h2>Descubra Campanhas</h2>
+          <p className="screen-copy">
+            Encontre e entre em lobbies de narração. Selecione uma campanha para solicitar entrada.
+          </p>
+        </div>
+        <button type="button" className="ghost-button" onClick={() => setScreen('player')}>
+          Voltar
+        </button>
+      </header>
+
+      {lobbiesLoading && lobbies.length === 0 ? (
+        <section className="loading-state">
+          <p>⏳ Carregando salas...</p>
+        </section>
+      ) : lobbies.length === 0 ? (
+        <section className="empty-state">
+          <h3>Nenhuma sala ativa no momento</h3>
+          <p>Convide um narrador ou cole o token de convite manualmente.</p>
+          <button type="button" className="ghost-button" onClick={() => setScreen('player')}>
+            Voltar ao Token Manual
+          </button>
+        </section>
+      ) : (
+        <section className="lobby-grid">
+          {lobbies.map((lobby) => (
+            <article
+              className={`lobby-card ${lobby.joinable ? '' : 'full'}`}
+              key={lobby.id}
+            >
+              <div className="lobby-header">
+                <h3>{lobby.bookName}</h3>
+                <p className="narrador-name">🎭 {lobby.narratorName}</p>
+              </div>
+              <div className="lobby-stats">
+                <span>🗺️ {lobby.mapCount} {lobby.mapCount === 1 ? 'mapa' : 'mapas'}</span>
+                <span>👥 {lobby.playerCount}/10 jogadores</span>
+              </div>
+              <p className="lobby-created">
+                Criada {Math.floor((Date.now() - lobby.createdAt) / 1000)}s atrás
+              </p>
+              <button
+                type="button"
+                className={lobby.joinable ? 'primary-button' : 'disabled-button'}
+                disabled={!lobby.joinable}
+                onClick={() => void joinViaLobbyId(lobby.id)}
+              >
+                {lobby.joinable ? 'Solicitar Entrada' : 'Sala Cheia'}
+              </button>
+            </article>
+          ))}
+        </section>
+      )}
+
+      <section className="player-fallback">
+        <hr />
+        <label>
+          <strong>Ou cole um token de convite:</strong>
+          <input
+            value={playerInviteToken}
+            onChange={(event) => setPlayerInviteToken(event.target.value)}
+            placeholder="invite_xxx..."
+          />
+        </label>
+        <button type="button" className="ghost-button" onClick={() => void joinAsPlayer()}>
+          Conectar com Token
+        </button>
       </section>
     </main>
   )
@@ -1879,6 +2096,9 @@ function App() {
   }
   if (screen === 'player') {
     return renderPlayer()
+  }
+  if (screen === 'player-lobby-list') {
+    return renderPlayerLobbyList()
   }
   if (screen === 'about') {
     return renderAbout()
