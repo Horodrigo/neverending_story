@@ -2245,3 +2245,142 @@ button {
     width: 100%;
   }
 }
+
+/* ─────────────── LOBBY DISCOVERY ─────────────── */
+
+.lobby-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 16px;
+  margin: 20px 0;
+}
+
+.lobby-card {
+  background: linear-gradient(135deg, var(--ink-3) 0%, var(--ink-2) 100%);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-card);
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  transition: all 0.3s ease;
+}
+
+.lobby-card:hover:not(.full) {
+  border-color: var(--ember);
+  box-shadow: 0 0 12px var(--ember-glow);
+  transform: translateY(-2px);
+}
+
+.lobby-card.full {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.lobby-header {
+  border-bottom: 1px solid var(--line-soft);
+  padding-bottom: 8px;
+}
+
+.lobby-header h3 {
+  margin: 0 0 4px 0;
+  font-size: 16px;
+  color: var(--ember-bright);
+  font-family: var(--font-display);
+}
+
+.narrador-name {
+  margin: 0;
+  font-size: 13px;
+  color: var(--parchment-dim);
+}
+
+.lobby-stats {
+  display: flex;
+  gap: 12px;
+  font-size: 13px;
+  color: var(--parchment-dim);
+}
+
+.lobby-created {
+  font-size: 12px;
+  color: var(--parchment-dim);
+  margin: 0;
+}
+
+.player-tabs {
+  display: flex;
+  gap: 8px;
+  margin: 12px 0;
+}
+
+.tab-button {
+  flex: 1;
+  padding: 8px 12px;
+  background: transparent;
+  border: 1px solid var(--line);
+  color: var(--parchment-dim);
+  border-radius: var(--radius-btn);
+  cursor: pointer;
+  font-size: 13px;
+  transition: all 0.2s ease;
+}
+
+.tab-button:hover {
+  color: var(--parchment);
+  border-color: var(--ember);
+}
+
+.tab-button.active {
+  background: var(--ember-glow);
+  color: var(--ember-bright);
+  border-color: var(--ember);
+}
+
+.player-fallback {
+  margin-top: 28px;
+  padding-top: 20px;
+  border-top: 1px solid var(--line-soft);
+}
+
+.player-fallback hr {
+  margin: 0 0 16px 0;
+  border: none;
+  border-top: 1px solid var(--line-soft);
+}
+
+.player-fallback label {
+  display: block;
+  margin-bottom: 12px;
+  font-size: 14px;
+}
+
+.loading-state,
+.empty-state {
+  text-align: center;
+  padding: 40px 20px;
+  background: rgba(200, 134, 47, 0.05);
+  border: 1px dashed var(--line);
+  border-radius: var(--radius-card);
+  margin: 20px 0;
+}
+
+.empty-state h3 {
+  color: var(--ember-bright);
+  margin-top: 0;
+}
+
+.empty-state p {
+  color: var(--parchment-dim);
+  margin-bottom: 16px;
+}
+
+.disabled-button {
+  padding: 8px 16px;
+  background: rgba(184, 170, 138, 0.2);
+  border: 1px solid var(--line-soft);
+  color: var(--parchment-dim);
+  border-radius: var(--radius-btn);
+  cursor: not-allowed;
+  font-size: 14px;
+}

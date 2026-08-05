@@ -3,6 +3,16 @@ export interface StructureMeta {
   description: string
 }
 
+export interface LobbyInfo {
+  id: string
+  narratorName: string
+  bookName: string
+  mapCount: number
+  playerCount: number
+  createdAt: number
+  joinable: boolean
+}
+
 export interface BookRecord {
   id: string
   name: string
