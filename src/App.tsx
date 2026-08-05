@@ -30,7 +30,7 @@ import type {
   StructureMeta,
 } from './types'
 
-type AppScreen = 'home' | 'narrator' | 'player' | 'player-lobby-list' | 'about' | 'studio'
+type AppScreen = 'home' | 'narrator' | 'player' | 'player-lobby-list' | 'player-studio' | 'about' | 'studio'
 type StudioRole = 'narrator' | 'player'
 
 interface SignalingAclEntry {
@@ -1045,7 +1045,7 @@ function App() {
         if (payload.type === 'room:approved') {
           setStudioRole('player')
           setEditMode(false)
-          setScreen('studio')
+          setScreen('player-studio')
           setSelectedBookId(payload.bookId ?? null)
           setCurrentMapId(null)
           setPlayerJoinState(prev => ({ ...prev, remoteMapJson: payload.state?.mapJson ?? null }))
@@ -1749,6 +1749,62 @@ function App() {
     </main>
   )
 
+  const renderPlayerStudio = () => {
+    const playerBooks = books.filter(b => b.id === selectedBookId)
+    const currentPlayerBook = playerBooks[0] ?? null
+    
+    return (
+      <main className="shell player-studio-shell">
+        <header className="screen-header">
+          <div>
+            <p className="eyebrow">Sessão de Jogo</p>
+            <h2>{currentPlayerBook?.name ?? 'Livro do Narrador'}</h2>
+            <p className="screen-copy">🔒 Modo somente leitura - Visualizando mapa do narrador em tempo real</p>
+          </div>
+          <button type="button" className="primary-button" onClick={() => setScreen('player-lobby-list')}>
+            🔙 Voltar ao Lobby
+          </button>
+        </header>
+
+        <section className="player-studio-content">
+          <aside className="player-studio-sidebar">
+            <h3>Status da Conexão</h3>
+            <div className="connection-status">
+              <p>{playerJoinState.message || 'Conectado ao narrador'}</p>
+            </div>
+          </aside>
+
+          <main className="player-studio-canvas-area">
+            <div className="canvas-container">
+              <canvas
+                id="mapCanvas"
+                width={DEFAULT_CANVAS_WIDTH}
+                height={DEFAULT_CANVAS_HEIGHT}
+                ref={htmlCanvasRef}
+              />
+            </div>
+            <p className="player-studio-hint">Clique nas estruturas para ver detalhes</p>
+          </main>
+
+          <aside className="player-studio-info">
+            <h3>Informações</h3>
+            <div className="info-panel">
+              <p>
+                <strong>Papel:</strong> Jogador (Leitura)
+              </p>
+              <p>
+                <strong>Narrador:</strong> {narratorRoomState.narratorName || 'Desconhecido'}
+              </p>
+              <p>
+                <strong>Status:</strong> Sessão ativa
+              </p>
+            </div>
+          </aside>
+        </section>
+      </main>
+    )
+  }
+
   const renderAbout = () => (
     <main className="shell screen-shell">
       <header className="screen-header">
@@ -2132,6 +2188,9 @@ function App() {
   }
   if (screen === 'player-lobby-list') {
     return renderPlayerLobbyList()
+  }
+  if (screen === 'player-studio') {
+    return renderPlayerStudio()
   }
   if (screen === 'about') {
     return renderAbout()
