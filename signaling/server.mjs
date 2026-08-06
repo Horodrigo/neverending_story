@@ -199,7 +199,13 @@ wss.on('connection', (socket, req) => {
         approvedAt: Date.now(),
         revokedAt: null,
       })
-      send(clients.get(pending.clientId).socket, {
+      const target = clients.get(pending.clientId)
+      if (!target) {
+        room.pending.delete(payload.pendingId)
+        send(socket, { type: 'server:error', message: 'Jogador desconectado antes da aprovação.' })
+        return
+      }
+      send(target.socket, {
         type: 'room:challenge',
         bookId: room.bookId,
         pendingId: pending.id,
@@ -220,10 +226,13 @@ wss.on('connection', (socket, req) => {
         return
       }
       room.pending.delete(payload.pendingId)
-      send(clients.get(pending.clientId).socket, {
-        type: 'room:rejected',
-        reason: 'Entrada recusada pelo narrador.',
-      })
+      const target = clients.get(pending.clientId)
+      if (target) {
+        send(target.socket, {
+          type: 'room:rejected',
+          reason: 'Entrada recusada pelo narrador.',
+        })
+      }
       return
     }
 
