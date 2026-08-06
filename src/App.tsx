@@ -11,8 +11,6 @@ import DOMPurify from 'dompurify'
 import { marked } from 'marked'
 import { db } from './db'
 import {
-  buildInviteUri,
-  generateNewInviteToken,
   getOrCreateIdentity,
   signChallenge,
 } from './crypto'
@@ -51,6 +49,7 @@ const DEFAULT_SIGNALING_URL =
   typeof window !== 'undefined'
     ? `ws://${window.location.hostname || 'localhost'}:8787`
     : 'ws://localhost:8787'
+const IS_PLAYER_ONLY_CLIENT = import.meta.env.VITE_PLAYER_ONLY === 'true'
 
 function getInitialSignalingUrl(): string {
   if (typeof window === 'undefined') {
@@ -134,7 +133,7 @@ function App() {
   const studioRoleRef = useRef<StudioRole>('narrator')
   const persistCurrentMapRef = useRef<() => Promise<void>>(async () => {})
 
-  const [screen, setScreen] = useState<AppScreen>('home')
+  const [screen, setScreen] = useState<AppScreen>(IS_PLAYER_ONLY_CLIENT ? 'player' : 'home')
   const [studioRole, setStudioRole] = useState<StudioRole>('narrator')
   const [assets, setAssets] = useState<AssetRecord[]>([])
   const [books, setBooks] = useState<BookRecord[]>([])
@@ -166,7 +165,6 @@ function App() {
     status: 'idle',
     message: '',
     selectedLobbyId: null,
-    lobbyPassword: '',
     remoteMapJson: null,
   })
   const [playerDisplayName, setPlayerDisplayName] = useState('')
@@ -279,16 +277,6 @@ function App() {
   useEffect(() => {
     localStorage.setItem('mapstudio_signaling_url', signalingUrl)
   }, [signalingUrl])
-
-  useEffect(() => {
-    if (screen !== 'player') {
-      return
-    }
-    const invite = new URL(window.location.href).searchParams.get('invite')
-    if (invite && !playerJoinState.lobbyPassword) {
-      setPlayerJoinState(prev => ({ ...prev, lobbyPassword: invite }))
-    }
-  }, [playerJoinState.lobbyPassword, screen])
 
   useEffect(() => {
     if (screen !== 'player-lobby-list') {
@@ -888,10 +876,11 @@ function App() {
             type: 'narrator:open-room',
             bookId: book.id,
             hostSecret: book.hostSecret,
-            inviteToken: book.inviteToken,
             narratorName: book.name || 'Narrador',
             bookName: book.name,
             lobbyPassword: book.lobbyPassword || null,
+            mapCount: maps.filter((map) => map.bookId === book.id).length,
+            isLobbyOpen: book.isLobbyOpen,
           }),
         )
       }
@@ -901,7 +890,6 @@ function App() {
           type: string
           pending?: PendingJoin | PendingJoin[]
           pendingId?: string
-          inviteToken?: string
           acl?: SignalingAclEntry[]
           bookId?: string
           message?: string
@@ -909,7 +897,7 @@ function App() {
 
         if (payload.type === 'room:opened') {
           setNarratorRoomState(prev => ({ ...prev, bookId: book.id }))
-          setNarratorRoomState(prev => ({ ...prev, message: 'Sala ativa. Convites e lobby em tempo real habilitados.' }))
+          setNarratorRoomState(prev => ({ ...prev, message: 'Sala ativa. Lobby em tempo real habilitado.' }))
           const initialPending = Array.isArray(payload.pending)
             ? payload.pending
             : payload.pending
@@ -924,22 +912,6 @@ function App() {
 
         if (payload.type === 'room:pending-join' && payload.pending && !Array.isArray(payload.pending)) {
           setNarratorRoomState((previous) => ({ ...previous, pendingJoins: [payload.pending as PendingJoin, ...previous.pendingJoins] }))
-          return
-        }
-
-        if (payload.type === 'room:invite-rotated' && payload.inviteToken) {
-          setNarratorRoomState(prev => ({ ...prev, message: 'Link de convite rotacionado com sucesso.' }))
-          setBooks((previous) =>
-            previous.map((candidate) =>
-              candidate.id === book.id
-                ? {
-                    ...candidate,
-                    inviteToken: payload.inviteToken!,
-                    inviteUpdatedAt: Date.now(),
-                  }
-                : candidate,
-            ),
-          )
           return
         }
 
@@ -961,38 +933,7 @@ function App() {
         setNarratorRoomState(prev => ({ ...prev, bookId: null }))
       }
     },
-    [applyAclUpdate, closeSocket, signalingUrl],
-  )
-
-  const rotateInvite = useCallback(
-    async (book: BookRecord) => {
-      const inviteToken = await generateNewInviteToken()
-      const now = Date.now()
-      await db.books.update(book.id, { inviteToken, inviteUpdatedAt: now, updatedAt: now })
-      setBooks((previous) =>
-        previous.map((candidate) =>
-          candidate.id === book.id
-            ? { ...candidate, inviteToken, inviteUpdatedAt: now, updatedAt: now }
-            : candidate,
-        ),
-      )
-
-      if (
-        wsRef.current &&
-        wsRef.current.readyState === WebSocket.OPEN &&
-        narratorRoomState.bookId === book.id
-      ) {
-        wsRef.current.send(
-          JSON.stringify({
-            type: 'narrator:rotate-invite',
-            bookId: book.id,
-            hostSecret: book.hostSecret,
-            inviteToken,
-          }),
-        )
-      }
-    },
-    [narratorRoomState.bookId],
+    [applyAclUpdate, closeSocket, maps, signalingUrl],
   )
 
   const approveJoin = useCallback(
@@ -1055,14 +996,13 @@ function App() {
   )
 
   const joinAsPlayer = useCallback(
-    async (path: 'lobby-id' | 'token', data: { lobbyId?: string; token?: string; lobbyPassword?: string | null } = {}) => {
+    async (data: { lobbyId?: string; lobbyPassword?: string | null } = {}) => {
       if (!playerDisplayName.trim()) {
         setPlayerJoinState(prev => ({ ...prev, message: 'Informe um nome de exibição antes de conectar.' }))
         return
       }
-
-      if (path === 'token' && !playerJoinState.lobbyPassword.trim()) {
-        setPlayerJoinState(prev => ({ ...prev, message: 'Informe o token de convite do narrador.' }))
+      if (!data.lobbyId) {
+        setPlayerJoinState(prev => ({ ...prev, message: 'Selecione um lobby válido para entrar.' }))
         return
       }
 
@@ -1074,28 +1014,16 @@ function App() {
       const ws = new WebSocket(signalingUrl)
       wsRef.current = ws
       ws.onopen = () => {
-        if (path === 'lobby-id') {
-          ws.send(
-            JSON.stringify({
-              type: 'player:join-via-lobby-id',
-              bookId: data.lobbyId,
-              displayName: playerDisplayName.trim(),
-              fingerprint: identity.fingerprint,
-              publicKeyJwk: identity.publicKeyJwk,
-              lobbyPassword: data.lobbyPassword || null,
-            }),
-          )
-        } else {
-          ws.send(
-            JSON.stringify({
-              type: 'player:join-request',
-              inviteToken: playerJoinState.lobbyPassword.trim(),
-              displayName: playerDisplayName.trim(),
-              fingerprint: identity.fingerprint,
-              publicKeyJwk: identity.publicKeyJwk,
-            }),
-          )
-        }
+        ws.send(
+          JSON.stringify({
+            type: 'player:join-via-lobby-id',
+            bookId: data.lobbyId,
+            displayName: playerDisplayName.trim(),
+            fingerprint: identity.fingerprint,
+            publicKeyJwk: identity.publicKeyJwk,
+            lobbyPassword: data.lobbyPassword || null,
+          }),
+        )
       }
 
       ws.onmessage = (event) => {
@@ -1105,6 +1033,8 @@ function App() {
           challenge?: string
           pendingId?: string
           bookId?: string
+          narratorName?: string
+          bookName?: string
           state?: { mapJson?: string }
           message?: string
         }
@@ -1134,6 +1064,11 @@ function App() {
           setEditMode(false)
           setScreen('player-studio')
           setSelectedBookId(payload.bookId ?? null)
+          setNarratorRoomState(prev => ({
+            ...prev,
+            narratorName: payload.narratorName || prev.narratorName,
+            bookName: payload.bookName || prev.bookName,
+          }))
           setCurrentMapId(null)
           setPlayerJoinState(prev => ({ ...prev, remoteMapJson: payload.state?.mapJson ?? null }))
           setPlayerJoinState(prev => ({ ...prev, message: 'Aprovado pelo narrador. Sessão em modo somente leitura ativa.' }))
@@ -1169,7 +1104,7 @@ function App() {
         }
       }
     },
-    [closeSocket, playerDisplayName, playerJoinState.lobbyPassword, signalingUrl],
+    [closeSocket, playerDisplayName, signalingUrl],
   )
 
   const handleAssetUpload = useCallback(async (event: ChangeEvent<HTMLInputElement>) => {
@@ -1410,10 +1345,6 @@ function App() {
     setModalContent(null)
   }, [persistCurrentMap])
 
-  const getInviteLink = useCallback((book: BookRecord) => {
-    return buildInviteUri(window.location.href.split('?')[0], book.inviteToken)
-  }, [])
-
   const saveBookName = useCallback(async () => {
     if (!editingBookId) return
     const trimmed = editingBookName.trim()
@@ -1505,7 +1436,7 @@ function App() {
           <button type="button" className="portal-card" onClick={() => setScreen('player')}>
             <span className="portal-title">Jogador</span>
             <span className="portal-copy">
-              Entra por convite com autenticação criptográfica e recebe mapa em modo leitura.
+              Entra por lobby com autenticação criptográfica e recebe mapa em modo leitura.
             </span>
           </button>
           <button type="button" className="portal-card" onClick={() => setScreen('about')}>
@@ -1526,7 +1457,7 @@ function App() {
           <p className="eyebrow">Narrador</p>
           <h2>Livros de mapas criados</h2>
           <p className="screen-copy">
-            Gerencie campanhas, controle ACL por livro e distribua convite ativo.
+            Gerencie campanhas, controle ACL por livro e mantenha lobbies ativos.
           </p>
         </div>
         <div className="screen-actions">
@@ -1673,14 +1604,6 @@ function App() {
                       </div>
                     )}
 
-                    <div className="invite-box">
-                      <p>Convite ativo:</p>
-                      <code>{getInviteLink(book)}</code>
-                      <button type="button" className="ghost-button" onClick={() => void rotateInvite(book)}>
-                        Rotacionar link
-                      </button>
-                    </div>
-
                     {bookAcl.length > 0 && (
                       <div className="invite-box">
                         <p>Jogadores autorizado ({bookAcl.length}):</p>
@@ -1764,15 +1687,17 @@ function App() {
       <header className="screen-header">
         <div>
           <p className="eyebrow">Jogador</p>
-          <h2>Entrada autenticada por convite</h2>
+          <h2>Entrada autenticada por lobby</h2>
           <p className="screen-copy">
             O jogador entra no lobby, aguarda aprovação manual do narrador e autentica via
             desafio-resposta com chave local.
           </p>
         </div>
-        <button type="button" className="ghost-button" onClick={() => setScreen('home')}>
-          Voltar
-        </button>
+        {!IS_PLAYER_ONLY_CLIENT ? (
+          <button type="button" className="ghost-button" onClick={() => setScreen('home')}>
+            Voltar
+          </button>
+        ) : null}
       </header>
 
       <section className="player-join-card">
@@ -1801,17 +1726,7 @@ function App() {
             🔍 Descobrir Salas
           </button>
         </div>
-        <label>
-          Token de convite
-          <input
-           value={playerJoinState.lobbyPassword}
-           onChange={(event) => setPlayerJoinState(prev => ({ ...prev, lobbyPassword: event.target.value }))}
-            placeholder="invite_xxx..."
-          />
-        </label>
-        <button type="button" className="primary-button" onClick={() => void joinAsPlayer('token', { token: playerJoinState.lobbyPassword })}>
-          Entrar na campanha
-        </button>
+        <p>Use "Descobrir Salas" para entrar em um lobby ativo.</p>
         <p>{playerJoinState.message}</p>
         {playerIdentity ? (
           <small>Identidade local: {playerIdentity.fingerprint}</small>
@@ -1855,9 +1770,9 @@ function App() {
       ) : lobbies.length === 0 ? (
         <section className="empty-state">
           <h3>Nenhuma sala ativa no momento</h3>
-          <p>Convide um narrador ou cole o token de convite manualmente.</p>
+          <p>Peça ao narrador para conectar um livro ao lobby.</p>
           <button type="button" className="ghost-button" onClick={() => setScreen('player')}>
-            Voltar ao Token Manual
+            Voltar
           </button>
         </section>
       ) : (
@@ -1888,7 +1803,7 @@ function App() {
                     setPlayerPasswordInput('')
                     setShowPasswordPrompt(true)
                   } else {
-                    void joinAsPlayer('lobby-id', { lobbyId: lobby.id, lobbyPassword: null })
+                    void joinAsPlayer({ lobbyId: lobby.id, lobbyPassword: null })
                   }
                 }}
               >
@@ -1899,20 +1814,6 @@ function App() {
         </section>
       )}
 
-      <section className="player-fallback">
-        <hr />
-        <label>
-          <strong>Ou cole um token de convite:</strong>
-          <input
-            value={playerJoinState.lobbyPassword}
-            onChange={(event) => setPlayerJoinState(prev => ({ ...prev, lobbyPassword: event.target.value }))}
-            placeholder="invite_xxx..."
-          />
-        </label>
-        <button type="button" className="ghost-button" onClick={() => void joinAsPlayer('token', { token: playerJoinState.lobbyPassword })}>
-          Conectar com Token
-        </button>
-      </section>
       {renderPlayerPasswordPrompt()}
     </main>
   )
@@ -1939,7 +1840,7 @@ function App() {
               onChange={(e) => setPlayerPasswordInput(e.target.value)}
               onKeyDown={(e) => {
                 if (e.key === 'Enter' && pendingLobbyPasswordEntry) {
-                  void joinAsPlayer('lobby-id', {
+                  void joinAsPlayer({
                     lobbyId: pendingLobbyPasswordEntry.lobbyId,
                     lobbyPassword: playerPasswordInput || null,
                   })
@@ -1954,7 +1855,7 @@ function App() {
               className="btn btn-save"
               onClick={() => {
                 if (pendingLobbyPasswordEntry) {
-                  void joinAsPlayer('lobby-id', {
+                  void joinAsPlayer({
                     lobbyId: pendingLobbyPasswordEntry.lobbyId,
                     lobbyPassword: playerPasswordInput || null,
                   })
@@ -2071,7 +1972,7 @@ function App() {
         <article className="book-card">
           <h3>Rede</h3>
           <p>
-            Sinalização por WebSocket com lobby, ACL, rotação de convites, aprovação manual e
+            Sinalização por WebSocket com lobby, ACL, aprovação manual e
             sincronização em tempo real do estado do mapa.
           </p>
         </article>
@@ -2407,6 +2308,16 @@ function App() {
       closeSocket()
     }
   }, [closeSocket])
+
+  if (IS_PLAYER_ONLY_CLIENT) {
+    if (screen === 'player-lobby-list') {
+      return renderPlayerLobbyList()
+    }
+    if (screen === 'player-studio') {
+      return renderPlayerStudio()
+    }
+    return renderPlayer()
+  }
 
   if (screen === 'home') {
     return renderHome()

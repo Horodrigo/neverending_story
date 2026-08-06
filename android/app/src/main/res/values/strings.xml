@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Neverending Jogadores</string>
+    <string name="title_activity_main">Neverending Jogadores</string>
+    <string name="package_name">com.neverending.jogadores</string>
+    <string name="custom_url_scheme">com.neverending.jogadores</string>
+</resources>

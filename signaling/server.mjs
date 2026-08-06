@@ -5,6 +5,7 @@ import { WebSocketServer } from 'ws'
 const PORT = Number(process.env.SIGNALING_PORT || 8787)
 const rooms = new Map()
 const clients = new Map()
+const MAX_PLAYERS_PER_ROOM = 10
 
 function randomToken(prefix) {
   const bytes = new Uint8Array(18)
@@ -55,6 +56,12 @@ function ensureRoom(bookId) {
       acl: new Map(),
       players: new Map(),
       state: null,
+      narratorName: 'Narrador',
+      bookName: 'Livro sem nome',
+      lobbyPassword: null,
+      mapCount: 0,
+      isLobbyOpen: true,
+      createdAt: Date.now(),
       updatedAt: Date.now(),
     })
   }
@@ -74,10 +81,68 @@ function roomParticipants(room) {
   return participants
 }
 
+function hasActiveHost(room) {
+  return Boolean(room.hostClientId && clients.get(room.hostClientId))
+}
+
+function isLobbyJoinable(room) {
+  return hasActiveHost(room) && room.isLobbyOpen !== false && room.players.size < MAX_PLAYERS_PER_ROOM
+}
+
+function serializeLobby(room) {
+  return {
+    id: room.bookId,
+    narratorName: room.narratorName || 'Narrador',
+    bookName: room.bookName || 'Livro sem nome',
+    hasPassword: Boolean(room.lobbyPassword),
+    mapCount: Number.isFinite(room.mapCount) ? room.mapCount : 0,
+    playerCount: room.players.size,
+    createdAt: room.createdAt || room.updatedAt || Date.now(),
+    joinable: isLobbyJoinable(room),
+  }
+}
+
+function buildPendingEntry({ clientId, req, room, payload }) {
+  const country = getCountryFromRequest(req)
+  const pendingId = randomToken('pending')
+  const challengeBytes = new Uint8Array(24)
+  webcrypto.getRandomValues(challengeBytes)
+  const challenge = Buffer.from(challengeBytes).toString('base64url')
+  return {
+    id: pendingId,
+    clientId,
+    bookId: room.bookId,
+    displayName: payload.displayName,
+    fingerprint: payload.fingerprint,
+    publicKeyJwk: payload.publicKeyJwk,
+    country,
+    challenge,
+    createdAt: Date.now(),
+  }
+}
+
 const server = createServer((req, res) => {
-  if (req.url === '/health') {
+  res.setHeader('access-control-allow-origin', '*')
+  res.setHeader('access-control-allow-methods', 'GET, OPTIONS')
+  res.setHeader('access-control-allow-headers', 'content-type')
+  if (req.method === 'OPTIONS') {
+    res.writeHead(204)
+    res.end()
+    return
+  }
+  const url = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`)
+  if (url.pathname === '/health') {
     res.writeHead(200, { 'content-type': 'application/json' })
     res.end(JSON.stringify({ ok: true }))
+    return
+  }
+  if (req.method === 'GET' && url.pathname === '/api/lobbies') {
+    const activeLobbies = [...rooms.values()]
+      .filter((room) => hasActiveHost(room))
+      .map((room) => serializeLobby(room))
+      .sort((left, right) => right.createdAt - left.createdAt)
+    res.writeHead(200, { 'content-type': 'application/json' })
+    res.end(JSON.stringify(activeLobbies))
     return
   }
   res.writeHead(404)
@@ -110,6 +175,11 @@ wss.on('connection', (socket, req) => {
       room.hostClientId = clientId
       room.hostSecret = payload.hostSecret
       room.inviteToken = payload.inviteToken || room.inviteToken
+      room.narratorName = payload.narratorName || room.narratorName
+      room.bookName = payload.bookName || room.bookName
+      room.lobbyPassword = payload.lobbyPassword || null
+      room.mapCount = Number.isFinite(payload.mapCount) ? payload.mapCount : room.mapCount
+      room.isLobbyOpen = payload.isLobbyOpen !== false
       room.updatedAt = Date.now()
       client.role = 'narrator'
       client.bookId = payload.bookId
@@ -138,33 +208,34 @@ wss.on('connection', (socket, req) => {
       return
     }
 
-    if (payload.type === 'player:join-request') {
-      const country = getCountryFromRequest(req)
-      const room = [...rooms.values()].find((candidate) => candidate.inviteToken === payload.inviteToken)
+    if (payload.type === 'player:join-via-lobby-id') {
+      const room = rooms.get(payload.bookId)
       if (!room) {
-        send(socket, { type: 'room:rejected', reason: 'Invite inválido ou expirado.' })
+        send(socket, { type: 'room:rejected', reason: 'Lobby não encontrado.' })
+        return
+      }
+      if (!hasActiveHost(room)) {
+        send(socket, { type: 'room:rejected', reason: 'Narrador offline neste lobby.' })
+        return
+      }
+      if (room.isLobbyOpen === false) {
+        send(socket, { type: 'room:rejected', reason: 'Lobby fechado pelo narrador.' })
+        return
+      }
+      if (room.players.size >= MAX_PLAYERS_PER_ROOM) {
+        send(socket, { type: 'room:rejected', reason: 'Sala cheia.' })
+        return
+      }
+      if (room.lobbyPassword && room.lobbyPassword !== (payload.lobbyPassword || null)) {
+        send(socket, { type: 'room:rejected', reason: 'Senha do lobby inválida.' })
         return
       }
       client.role = 'player'
       client.bookId = room.bookId
 
-      const pendingId = randomToken('pending')
-      const challengeBytes = new Uint8Array(24)
-      webcrypto.getRandomValues(challengeBytes)
-      const challenge = Buffer.from(challengeBytes).toString('base64url')
-      const pendingEntry = {
-        id: pendingId,
-        clientId,
-        bookId: room.bookId,
-        displayName: payload.displayName,
-        fingerprint: payload.fingerprint,
-        publicKeyJwk: payload.publicKeyJwk,
-        country,
-        challenge,
-        createdAt: Date.now(),
-      }
+      const pendingEntry = buildPendingEntry({ clientId, req, room, payload })
 
-      room.pending.set(pendingId, pendingEntry)
+      room.pending.set(pendingEntry.id, pendingEntry)
       if (room.hostClientId && clients.get(room.hostClientId)) {
         send(clients.get(room.hostClientId).socket, {
           type: 'room:pending-join',
@@ -176,6 +247,14 @@ wss.on('connection', (socket, req) => {
           message: 'Aguardando narrador abrir a sala para aprovação.',
         })
       }
+      return
+    }
+
+    if (payload.type === 'player:join-request') {
+      send(socket, {
+        type: 'room:rejected',
+        reason: 'Convites por token foram desativados. Use a lista de lobbies.',
+      })
       return
     }
 
@@ -265,6 +344,8 @@ wss.on('connection', (socket, req) => {
         type: 'room:approved',
         clientId,
         bookId: room.bookId,
+        narratorName: room.narratorName,
+        bookName: room.bookName,
         state: room.state,
         participants: roomParticipants(room),
       })

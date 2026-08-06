@@ -6,11 +6,15 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
+    "build:player": "tsc -b && vite build --mode player",
     "lint": "oxlint",
     "preview": "vite preview",
     "signaling": "node signaling/server.mjs",
     "host": "node host/start-host.mjs",
-    "installer:windows": "powershell -ExecutionPolicy Bypass -File installer/windows/Neverending-Host-Installer.ps1"
+    "installer:windows": "powershell -ExecutionPolicy Bypass -File installer/windows/Neverending-Host-Installer.ps1",
+    "android:sync": "npm run build:player && npx cap sync android",
+    "android:open": "npx cap open android",
+    "android:apk:debug": "npm run android:sync && cd android && .\\gradlew.bat assembleDebug"
   },
   "dependencies": {
     "dexie": "^4.4.4",
@@ -22,6 +26,9 @@
     "ws": "^8.18.3"
   },
   "devDependencies": {
+    "@capacitor/android": "^8.5.0",
+    "@capacitor/cli": "^8.5.0",
+    "@capacitor/core": "^8.5.0",
     "@types/node": "^24.13.3",
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",

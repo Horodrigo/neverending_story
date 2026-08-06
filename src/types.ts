@@ -29,7 +29,6 @@ export interface PlayerJoinState {
   status: 'idle' | 'discovering' | 'joining' | 'authenticating' | 'approved' | 'rejected' | 'revoked'
   message: string
   selectedLobbyId: string | null
-  lobbyPassword: string
   remoteMapJson: string | null
 }
 
